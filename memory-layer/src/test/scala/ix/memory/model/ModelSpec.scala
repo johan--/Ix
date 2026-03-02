@@ -133,53 +133,29 @@ class ModelSpec extends AnyFlatSpec with Matchers {
     val edgeId   = EdgeId(UUID.randomUUID())
     val claimId  = ClaimId(UUID.randomUUID())
 
-    val prov = Provenance(
-      sourceUri  = "git://repo/file.scala",
-      sourceHash = Some("def456"),
-      extractor  = "tree-sitter",
-      sourceType = SourceType.Code,
-      observedAt = Instant.parse("2025-06-01T12:00:00Z")
-    )
+    val dstId = NodeId(UUID.randomUUID())
 
     val ops: Vector[PatchOp] = Vector(
       PatchOp.UpsertNode(
-        GraphNode(
-          id         = nodeId,
-          kind       = NodeKind.Function,
-          tenant     = tenantId,
-          attrs      = Json.obj("name" -> Json.fromString("foo")),
-          provenance = prov,
-          createdRev = Rev(1L),
-          deletedRev = None,
-          createdAt  = Instant.parse("2025-06-01T12:00:00Z"),
-          updatedAt  = Instant.parse("2025-06-01T12:00:00Z")
-        )
+        id   = nodeId,
+        kind = NodeKind.Function,
+        name = "foo",
+        attrs = Map("lang" -> Json.fromString("scala"))
       ),
       PatchOp.UpsertEdge(
-        GraphEdge(
-          id         = edgeId,
-          src        = nodeId,
-          dst        = NodeId(UUID.randomUUID()),
-          predicate  = EdgePredicate("CALLS"),
-          tenant     = tenantId,
-          attrs      = Json.obj(),
-          provenance = prov,
-          createdRev = Rev(1L),
-          deletedRev = None
-        )
+        id        = edgeId,
+        src       = nodeId,
+        dst       = dstId,
+        predicate = EdgePredicate("CALLS"),
+        attrs     = Map.empty[String, Json]
       ),
       PatchOp.DeleteNode(nodeId),
       PatchOp.DeleteEdge(edgeId),
       PatchOp.AssertClaim(
-        Claim(
-          id         = claimId,
-          entityId   = nodeId,
-          statement  = "function foo is pure",
-          status     = ClaimStatus.Active,
-          provenance = prov,
-          createdRev = Rev(1L),
-          deletedRev = None
-        )
+        entityId   = nodeId,
+        field      = "purity",
+        value      = Json.fromString("pure"),
+        confidence = Some(0.9)
       ),
       PatchOp.RetractClaim(claimId)
     )
@@ -189,7 +165,12 @@ class ModelSpec extends AnyFlatSpec with Matchers {
       tenant    = tenantId,
       actor     = "extractor:tree-sitter",
       timestamp = Instant.parse("2025-06-01T12:00:00Z"),
-      source    = PatchSource(uri = "git://repo", ref = Some("main")),
+      source    = PatchSource(
+        uri        = "git://repo",
+        sourceHash = Some("abc123"),
+        extractor  = "tree-sitter",
+        sourceType = SourceType.Code
+      ),
       baseRev   = Rev(0L),
       ops       = ops,
       replaces  = Vector.empty,

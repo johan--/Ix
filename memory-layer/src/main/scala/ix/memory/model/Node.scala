@@ -18,27 +18,27 @@ object NodeKind {
   case object Endpoint    extends NodeKind
 
   private val nameMap: Map[String, NodeKind] = Map(
-    "Module"      -> Module,
-    "File"        -> File,
-    "Class"       -> Class,
-    "Function"    -> Function,
-    "Variable"    -> Variable,
-    "Config"      -> Config,
-    "ConfigEntry" -> ConfigEntry,
-    "Service"     -> Service,
-    "Endpoint"    -> Endpoint
+    "module"       -> Module,
+    "file"         -> File,
+    "class"        -> Class,
+    "function"     -> Function,
+    "variable"     -> Variable,
+    "config"       -> Config,
+    "config_entry" -> ConfigEntry,
+    "service"      -> Service,
+    "endpoint"     -> Endpoint
   )
 
   implicit val encoder: Encoder[NodeKind] = Encoder[String].contramap {
-    case Module      => "Module"
-    case File        => "File"
-    case Class       => "Class"
-    case Function    => "Function"
-    case Variable    => "Variable"
-    case Config      => "Config"
-    case ConfigEntry => "ConfigEntry"
-    case Service     => "Service"
-    case Endpoint    => "Endpoint"
+    case Module      => "module"
+    case File        => "file"
+    case Class       => "class"
+    case Function    => "function"
+    case Variable    => "variable"
+    case Config      => "config"
+    case ConfigEntry => "config_entry"
+    case Service     => "service"
+    case Endpoint    => "endpoint"
   }
 
   implicit val decoder: Decoder[NodeKind] = Decoder[String].emap { s =>
