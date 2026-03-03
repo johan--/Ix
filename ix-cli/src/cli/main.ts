@@ -1,0 +1,33 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import { registerQueryCommand } from "./commands/query.js";
+import { registerIngestCommand } from "./commands/ingest.js";
+import { registerDecideCommand } from "./commands/decide.js";
+import { registerSearchCommand } from "./commands/search.js";
+import { registerTruthCommand } from "./commands/truth.js";
+import { registerPatchesCommand } from "./commands/patches.js";
+import { registerStatusCommand } from "./commands/status.js";
+import { registerEntityCommand } from "./commands/entity.js";
+import { registerHistoryCommand } from "./commands/history.js";
+import { registerConflictsCommand } from "./commands/conflicts.js";
+import { registerDiffCommand } from "./commands/diff.js";
+
+const program = new Command();
+program
+  .name("ix")
+  .description("Ix Memory — Persistent Memory for LLM Systems")
+  .version("0.1.0");
+
+registerQueryCommand(program);
+registerIngestCommand(program);
+registerDecideCommand(program);
+registerSearchCommand(program);
+registerTruthCommand(program);
+registerPatchesCommand(program);
+registerStatusCommand(program);
+registerEntityCommand(program);
+registerHistoryCommand(program);
+registerConflictsCommand(program);
+registerDiffCommand(program);
+
+program.parse();
