@@ -10,7 +10,7 @@ object GraphPatchBuilder {
   /**
    * Build a GraphPatch from a ParseResult and file metadata.
    *
-   * Uses deterministic UUID generation (UUID v5 / nameUUID) so that
+   * Uses deterministic UUID generation (UUID v3 (MD5-based nameUUID)) so that
    * re-parsing the same file produces the same node/edge IDs, enabling
    * idempotent upserts.
    */

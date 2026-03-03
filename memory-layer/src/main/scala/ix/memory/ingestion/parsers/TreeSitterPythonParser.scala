@@ -81,32 +81,35 @@ class TreeSitterPythonParser {
     var entities = Vector(fileEntity)
     var relationships = Vector.empty[ParsedRelationship]
 
-    // Track which class we're currently inside (based on indentation)
-    var currentClass: Option[String] = None
-    var classIndent: Int = -1
+    // Track class ranges: (className, lineStart, lineEnd) for containment checks
+    var classRanges = Vector.empty[(String, Int, Int)]
 
     for ((line, idx) <- lines.zipWithIndex) {
       val lineNum = idx + 1
 
+      // Skip comment lines — prevents matching patterns inside comments
+      if (line.trim.startsWith("#")) {
+        // no-op: skip this line entirely
+      } else {
+
       // Check for class definition
       ClassPattern.findFirstMatchIn(line).foreach { m =>
         val className = m.group(1)
+        val classEnd = findBlockEnd(lines, idx)
         entities = entities :+ ParsedEntity(
           name      = className,
           kind      = NodeKind.Class,
           attrs     = Map("language" -> Json.fromString("python")),
           lineStart = lineNum,
-          lineEnd   = findBlockEnd(lines, idx)
+          lineEnd   = classEnd
         )
         // File DEFINES class
         relationships = relationships :+ ParsedRelationship(fileName, className, "DEFINES")
-        currentClass = Some(className)
-        classIndent = line.takeWhile(_ == ' ').length
+        classRanges = classRanges :+ (className, lineNum, classEnd)
       }
 
       // Check for function/method definition
       FuncPattern.findFirstMatchIn(line).foreach { m =>
-        val indent = m.group(1).length
         val funcName = m.group(2)
 
         entities = entities :+ ParsedEntity(
@@ -117,13 +120,17 @@ class TreeSitterPythonParser {
           lineEnd   = findBlockEnd(lines, idx)
         )
 
-        if (indent > 0 && currentClass.isDefined && indent > classIndent) {
-          // Method inside a class
-          relationships = relationships :+ ParsedRelationship(currentClass.get, funcName, "DEFINES")
-        } else {
-          // Top-level function — file defines it
-          relationships = relationships :+ ParsedRelationship(fileName, funcName, "DEFINES")
-          currentClass = None
+        // Check if this function's line falls within any class range
+        val enclosingClass = classRanges.find { case (_, start, end) =>
+          lineNum > start && lineNum <= end
+        }
+        enclosingClass match {
+          case Some((className, _, _)) =>
+            // Method inside a class
+            relationships = relationships :+ ParsedRelationship(className, funcName, "DEFINES")
+          case None =>
+            // Top-level function — file defines it
+            relationships = relationships :+ ParsedRelationship(fileName, funcName, "DEFINES")
         }
 
         // Extract function calls within the function body
@@ -158,6 +165,8 @@ class TreeSitterPythonParser {
         }
         relationships = relationships :+ ParsedRelationship(fileName, moduleName, "IMPORTS")
       }
+
+      } // end else (non-comment line)
     }
 
     ParseResult(entities, relationships)

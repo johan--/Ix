@@ -18,7 +18,10 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi) {
    */
   def ingestFile(tenant: TenantId, filePath: Path): IO[CommitResult] = {
     for {
-      source <- IO.blocking(scala.io.Source.fromFile(filePath.toFile).mkString)
+      source <- IO.blocking {
+        val s = scala.io.Source.fromFile(filePath.toFile)
+        try s.mkString finally s.close()
+      }
       parser <- IO.fromOption(parserRouter.parserFor(filePath.toString))(
         new IllegalArgumentException(s"No parser for: $filePath")
       )
