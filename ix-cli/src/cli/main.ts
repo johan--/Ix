@@ -11,6 +11,8 @@ import { registerEntityCommand } from "./commands/entity.js";
 import { registerHistoryCommand } from "./commands/history.js";
 import { registerConflictsCommand } from "./commands/conflicts.js";
 import { registerDiffCommand } from "./commands/diff.js";
+import { registerInitCommand } from "./commands/init.js";
+import { registerMcpInstallCommand } from "./commands/mcp-install.js";
 
 const program = new Command();
 program
@@ -29,6 +31,8 @@ registerEntityCommand(program);
 registerHistoryCommand(program);
 registerConflictsCommand(program);
 registerDiffCommand(program);
+registerInitCommand(program);
+registerMcpInstallCommand(program);
 
 program
   .command("mcp-start")
