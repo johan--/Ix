@@ -47,7 +47,7 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
     val expander  = new GraphExpander(queryApi)
     val collector = new ClaimCollector(queryApi)
     val scorer    = new ConfidenceScorerImpl()
-    val detector  = new DefaultConflictDetector()
+    val detector  = new ConflictDetectorImpl()
     new ContextService(queryApi, seeder, expander, collector, scorer, detector)
   }
 
@@ -190,9 +190,9 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
     }
   }
 
-  // ── Test 6: DefaultConflictDetector returns empty ──────────────────
+  // ── Test 6: No conflicts when only one claim per entity ────────────
 
-  it should "return empty conflicts with default detector" in {
+  it should "return empty conflicts when no contradictions exist" in {
     clientResource.use { client =>
       val writeApi = new ArangoGraphWriteApi(client)
       val queryApi = new ArangoGraphQueryApi(client)
