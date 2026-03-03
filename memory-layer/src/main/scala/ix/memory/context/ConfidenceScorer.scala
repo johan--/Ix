@@ -48,7 +48,8 @@ class ConfidenceScorerImpl extends ConfidenceScorer {
     val conflict = computeConflictPenalty(ctx.conflictState)
     val intent = computeIntentAlignment(ctx.intentAlignment)
 
-    ScoredClaim(claim, ConfidenceBreakdown(base, verif, recency, corr, conflict, intent))
+    val breakdown = ConfidenceBreakdown(base, verif, recency, corr, conflict, intent)
+    ScoredClaim(claim, breakdown, relevance = 1.0, finalScore = breakdown.score)
   }
 
   private def computeRecency(ctx: ScoringContext): Factor = {

@@ -81,6 +81,7 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
         // seedEntities is List[NodeId] — verify at least 1 seed was found
         result.metadata.seedEntities should not be empty
         result.metadata.hopsExpanded shouldBe 1
+        result.metadata.depth shouldBe Some("standard")
       }
     }
   }
@@ -137,12 +138,16 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
         result <- contextService.query("What does billing do?")
       } yield {
         result.claims should not be empty
-        // All claims should have a score > 0
+        // All claims should have a confidence score > 0
         result.claims.foreach { sc =>
           sc.confidence.score should be > 0.0
         }
-        // Claims should be sorted descending by score
-        val scores = result.claims.map(_.confidence.score)
+        // Claims should have finalScore > 0
+        result.claims.foreach { sc =>
+          sc.finalScore should be > 0.0
+        }
+        // Claims should be sorted descending by finalScore
+        val scores = result.claims.map(_.finalScore)
         scores shouldBe scores.sorted.reverse
       }
     }
@@ -219,12 +224,12 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
 
     val scored1 = ScoredClaim(claim1, ConfidenceBreakdown(
       Factor(0.5, "low"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok")
-    ))
+    ), relevance = 1.0, finalScore = 0.5)
     val scored2 = ScoredClaim(claim2, ConfidenceBreakdown(
       Factor(0.9, "high"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok"), Factor(1.0, "ok")
-    ))
+    ), relevance = 1.0, finalScore = 0.9)
 
     val ranked = ContextRanker.rank(Vector(scored1, scored2))
-    ranked.head.confidence.score should be > ranked.last.confidence.score
+    ranked.head.finalScore should be > ranked.last.finalScore
   }
 }

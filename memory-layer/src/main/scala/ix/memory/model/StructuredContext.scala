@@ -5,7 +5,9 @@ import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 
 final case class ScoredClaim(
   claim:      Claim,
-  confidence: ConfidenceBreakdown
+  confidence: ConfidenceBreakdown,
+  relevance:  Double = 1.0,
+  finalScore: Double = 0.0
 )
 
 object ScoredClaim {
