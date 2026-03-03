@@ -35,6 +35,7 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi, quer
       // Check for existing patch from same source+extractor
       extractor = if (filePath.toString.endsWith(".py")) "tree-sitter-python/1.0"
                   else if (filePath.toString.endsWith(".ts") || filePath.toString.endsWith(".tsx")) "typescript-parser/1.0"
+                  else if (filePath.toString.endsWith(".json") || filePath.toString.endsWith(".yaml") || filePath.toString.endsWith(".yml") || filePath.toString.endsWith(".toml")) "config-parser/1.0"
                   else "unknown-parser/1.0"
       existing <- queryApi.getPatchesBySource(filePath.toString, extractor)
       prevPatch = existing.headOption
@@ -93,7 +94,8 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi, quer
     val extensions = language match {
       case Some("python")     => Set(".py")
       case Some("typescript") => Set(".ts", ".tsx")
-      case _                  => Set(".py", ".ts", ".tsx") // all supported
+      case Some("config")     => Set(".json", ".yaml", ".yml", ".toml")
+      case _                  => Set(".py", ".ts", ".tsx", ".json", ".yaml", ".yml", ".toml") // all supported
     }
 
     if (Files.isRegularFile(path)) {

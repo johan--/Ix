@@ -30,6 +30,7 @@ object GraphPatchBuilder {
 
     val extractor = if (filePath.endsWith(".py")) "tree-sitter-python/1.0"
                     else if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) "typescript-parser/1.0"
+                    else if (filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml") || filePath.endsWith(".toml")) "config-parser/1.0"
                     else "unknown-parser/1.0"
 
     val nodeOps = parseResult.entities.map { e =>
@@ -70,11 +71,14 @@ object GraphPatchBuilder {
     val claimOps = relationshipClaims ++ attributeClaims
     val allOps   = nodeOps ++ edgeOps ++ claimOps
 
+    val sourceType = if (filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml") || filePath.endsWith(".toml")) SourceType.Config
+                     else SourceType.Code
+
     GraphPatch(
       patchId   = PatchId(UUID.randomUUID()),
       actor     = "ix/ingestion",
       timestamp = Instant.now(),
-      source    = PatchSource(filePath, sourceHash, extractor, SourceType.Code),
+      source    = PatchSource(filePath, sourceHash, extractor, sourceType),
       baseRev   = Rev(0L),
       ops       = allOps,
       replaces  = Vector.empty,
