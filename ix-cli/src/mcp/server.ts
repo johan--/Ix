@@ -1,0 +1,487 @@
+/**
+ * Ix Memory MCP Server
+ *
+ * Exposes 13 tools and 2 resources over the Model Context Protocol,
+ * providing persistent, time-aware memory to LLM coding assistants.
+ */
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { IxClient } from "../client/api.js";
+
+// ---------------------------------------------------------------------------
+// Server instructions — sent to the LLM at connection time
+// ---------------------------------------------------------------------------
+const INSTRUCTIONS = `You have access to Ix Memory — a persistent, time-aware memory system for this codebase.
+
+MANDATORY RULES:
+1. ALWAYS call ix_query before answering questions about the codebase
+2. AFTER any design decision, call ix_decide to record it
+3. When you notice conflicting information, call ix_conflicts
+4. NEVER answer from memory alone when Ix has data
+5. After modifying code, call ix_ingest on changed files
+6. At start of each session, review ix://session/context
+7. When the user states a goal, call ix_truth to record it`;
+
+// ---------------------------------------------------------------------------
+// Client – uses IX_ENDPOINT env var or defaults to localhost:8090
+// ---------------------------------------------------------------------------
+const client = new IxClient(process.env.IX_ENDPOINT ?? "http://localhost:8090");
+
+// ---------------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------------
+const server = new McpServer(
+  { name: "ix-memory", version: "0.1.0" },
+  { instructions: INSTRUCTIONS },
+);
+
+// ============================= TOOLS =======================================
+
+// --- ix_query ---------------------------------------------------------------
+server.tool(
+  "ix_query",
+  "ALWAYS call this tool BEFORE answering any question about the codebase, architecture, or technical decisions. Ix Memory contains structured, versioned knowledge with confidence scores. Never rely on your training data alone when Ix has data available.",
+  {
+    question: z.string().describe("The question to ask the knowledge graph"),
+    asOfRev: z.optional(z.number()).describe("Optional revision snapshot"),
+    depth: z.optional(z.string()).describe("Query depth: shallow | deep"),
+  },
+  async ({ question, asOfRev, depth }) => {
+    try {
+      const ctx = await client.query(question, { asOfRev, depth });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(ctx, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_query failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_ingest ---------------------------------------------------------------
+server.tool(
+  "ix_ingest",
+  "Ingest source files into the Ix knowledge graph. Call after modifying code so the memory stays current.",
+  {
+    path: z.string().describe("File or directory path to ingest"),
+    recursive: z.optional(z.boolean()).describe("Recurse into subdirectories"),
+  },
+  async ({ path, recursive }) => {
+    try {
+      const result = await client.ingest(path, recursive);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_ingest failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_decide ---------------------------------------------------------------
+server.tool(
+  "ix_decide",
+  "Record a design decision in the knowledge graph. Always call after making an architectural or design choice.",
+  {
+    title: z.string().describe("Short title of the decision"),
+    rationale: z.string().describe("Why this decision was made"),
+    intentId: z
+      .optional(z.string())
+      .describe("Optional intent this decision fulfils"),
+  },
+  async ({ title, rationale, intentId }) => {
+    try {
+      const result = await client.decide(title, rationale, { intentId });
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_decide failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_search ---------------------------------------------------------------
+server.tool(
+  "ix_search",
+  "Search nodes in the knowledge graph by term.",
+  {
+    term: z.string().describe("Search term"),
+    limit: z.optional(z.number()).describe("Max results to return"),
+  },
+  async ({ term, limit }) => {
+    try {
+      const nodes = await client.search(term, limit);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(nodes, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_search failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_entity ---------------------------------------------------------------
+server.tool(
+  "ix_entity",
+  "Get full details for an entity (node, claims, edges) by its ID.",
+  {
+    id: z.string().describe("Entity / node ID (UUID)"),
+  },
+  async ({ id }) => {
+    try {
+      const entity = await client.entity(id);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(entity, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_entity failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_assert ---------------------------------------------------------------
+server.tool(
+  "ix_assert",
+  "Assert a claim about an entity. Currently delegates to the ingestion pipeline — use ix_ingest to update claims through file ingestion.",
+  {
+    entityId: z.string().describe("Target entity ID"),
+    field: z.string().describe("Claim field / attribute name"),
+    value: z.string().describe("Claim value"),
+  },
+  async ({ entityId, field, value }) => {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `Assertion noted: entity=${entityId} field=${field} value=${value}`,
+            "",
+            "Direct claim assertion is not yet available as a standalone endpoint.",
+            "To persist this claim, use ix_ingest to re-ingest the source file",
+            "that contains this entity, and the parser will extract updated claims.",
+          ].join("\n"),
+        },
+      ],
+    };
+  },
+);
+
+// --- ix_diff -----------------------------------------------------------------
+server.tool(
+  "ix_diff",
+  "Show what changed between two revisions of the knowledge graph.",
+  {
+    fromRev: z.number().describe("Starting revision"),
+    toRev: z.number().describe("Ending revision"),
+    entityId: z
+      .optional(z.string())
+      .describe("Optional entity to scope the diff to"),
+  },
+  async ({ fromRev, toRev, entityId }) => {
+    try {
+      const diff = await client.diff(fromRev, toRev, entityId);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(diff, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_diff failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_conflicts ------------------------------------------------------------
+server.tool(
+  "ix_conflicts",
+  "List all detected conflicts in the knowledge graph. Call when you notice contradictory information.",
+  {},
+  async () => {
+    try {
+      const conflicts = await client.conflicts();
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(conflicts, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text" as const,
+            text: `ix_conflicts failed: ${String(err)}`,
+          },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_resolve --------------------------------------------------------------
+server.tool(
+  "ix_resolve",
+  "Resolve a detected conflict. Currently, record the resolution as a design decision using ix_decide.",
+  {
+    conflictId: z.string().describe("ID of the conflict to resolve"),
+    resolution: z
+      .string()
+      .describe("Description of how the conflict was resolved"),
+  },
+  async ({ conflictId, resolution }) => {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `Resolution noted for conflict ${conflictId}: ${resolution}`,
+            "",
+            "Direct conflict resolution is not yet available as a standalone endpoint.",
+            "To persist this resolution, call ix_decide with the resolution rationale.",
+            "This will record the decision and link it to the relevant intents.",
+          ].join("\n"),
+        },
+      ],
+    };
+  },
+);
+
+// --- ix_expand ---------------------------------------------------------------
+server.tool(
+  "ix_expand",
+  "Expand a node's neighborhood — retrieve connected nodes and edges.",
+  {
+    nodeId: z.string().describe("Node ID to expand from"),
+    hops: z
+      .optional(z.number())
+      .describe("Number of hops to traverse (default 1)"),
+    direction: z
+      .optional(z.string())
+      .describe("Edge direction: in | out | both (default both)"),
+  },
+  async ({ nodeId, hops: _hops, direction: _direction }) => {
+    try {
+      // The entity endpoint already returns edges; use it as the expansion source.
+      const entity = await client.entity(nodeId);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(entity, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_expand failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_history --------------------------------------------------------------
+server.tool(
+  "ix_history",
+  "Get the provenance chain for an entity — the full history of patches that created or modified it.",
+  {
+    entityId: z.string().describe("Entity ID to get history for"),
+  },
+  async ({ entityId }) => {
+    try {
+      const history = await client.provenance(entityId);
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(history, null, 2) },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_history failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_truth ----------------------------------------------------------------
+server.tool(
+  "ix_truth",
+  "Manage project intents (goals). Use action 'list' to see current intents, or 'add' to record a new goal.",
+  {
+    action: z.enum(["list", "add"]).describe("Action: list or add"),
+    statement: z
+      .optional(z.string())
+      .describe("Intent statement (required when action is 'add')"),
+    parentIntent: z
+      .optional(z.string())
+      .describe("Parent intent ID for hierarchical goals"),
+  },
+  async ({ action, statement, parentIntent }) => {
+    try {
+      if (action === "list") {
+        const intents = await client.listTruth();
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(intents, null, 2) },
+          ],
+        };
+      } else {
+        if (!statement) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: "The 'statement' parameter is required when action is 'add'.",
+              },
+            ],
+          };
+        }
+        const result = await client.createTruth(statement, parentIntent);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      }
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_truth failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// --- ix_patches --------------------------------------------------------------
+server.tool(
+  "ix_patches",
+  "List all patches, or get a specific patch by ID.",
+  {
+    patchId: z
+      .optional(z.string())
+      .describe("If provided, fetch this specific patch; otherwise list all"),
+  },
+  async ({ patchId }) => {
+    try {
+      if (patchId) {
+        const patch = await client.getPatch(patchId);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(patch, null, 2) },
+          ],
+        };
+      } else {
+        const patches = await client.listPatches();
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(patches, null, 2) },
+          ],
+        };
+      }
+    } catch (err) {
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_patches failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
+// ============================= RESOURCES ====================================
+
+// --- ix://session/context ----------------------------------------------------
+server.resource(
+  "ix-session-context",
+  "ix://session/context",
+  { description: "Session context nudge — review this at the start of each session" },
+  async (uri) => {
+    let text: string;
+    try {
+      const ctx = await client.query("session context overview", {});
+      text = JSON.stringify(ctx, null, 2);
+    } catch {
+      text = [
+        "Ix Memory session context is unavailable (server may not be running).",
+        "Start the Ix Memory Layer server and try again.",
+      ].join("\n");
+    }
+    return {
+      contents: [{ uri: uri.href, mimeType: "application/json", text }],
+    };
+  },
+);
+
+// --- ix://project/intent -----------------------------------------------------
+server.resource(
+  "ix-project-intent",
+  "ix://project/intent",
+  { description: "Current project intent tree — the goals and sub-goals for this project" },
+  async (uri) => {
+    let text: string;
+    try {
+      const intents = await client.listTruth();
+      text = JSON.stringify(intents, null, 2);
+    } catch {
+      text = [
+        "Ix Memory intent data is unavailable (server may not be running).",
+        "Start the Ix Memory Layer server and try again.",
+      ].join("\n");
+    }
+    return {
+      contents: [{ uri: uri.href, mimeType: "application/json", text }],
+    };
+  },
+);
+
+// ============================= START ========================================
+
+const transport = new StdioServerTransport();
+await server.connect(transport);

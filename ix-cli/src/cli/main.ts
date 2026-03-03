@@ -30,4 +30,11 @@ registerHistoryCommand(program);
 registerConflictsCommand(program);
 registerDiffCommand(program);
 
+program
+  .command("mcp-start")
+  .description("Start the MCP server (stdio transport)")
+  .action(async () => {
+    await import("../mcp/server.js");
+  });
+
 program.parse();
