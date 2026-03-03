@@ -77,7 +77,9 @@ class ModelSpec extends AnyFlatSpec with Matchers {
       NodeKind.Config,
       NodeKind.ConfigEntry,
       NodeKind.Service,
-      NodeKind.Endpoint
+      NodeKind.Endpoint,
+      NodeKind.Intent,
+      NodeKind.Decision
     )
 
     variants.foreach { nk =>
@@ -85,6 +87,11 @@ class ModelSpec extends AnyFlatSpec with Matchers {
       json.isString shouldBe true
       decode[NodeKind](json.noSpaces) shouldBe Right(nk)
     }
+  }
+
+  it should "include Intent and Decision" in {
+    NodeKind.decoder.decodeJson(Json.fromString("intent")) shouldBe Right(NodeKind.Intent)
+    NodeKind.decoder.decodeJson(Json.fromString("decision")) shouldBe Right(NodeKind.Decision)
   }
 
   // ── ClaimStatus ─────────────────────────────────────────────────────

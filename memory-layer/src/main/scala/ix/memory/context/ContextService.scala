@@ -51,13 +51,16 @@ class ContextService(
     } yield StructuredContext(
       claims    = ranked.toList,
       conflicts = conflicts.toList,
+      decisions = List.empty,
+      intents   = List.empty,
       nodes     = (seeds ++ expanded.nodes).distinctBy(_.id).toList,
       edges     = expanded.edges.toList,
       metadata  = ContextMetadata(
         query        = question,
         seedEntities = seeds.map(_.id).toList,
         hopsExpanded = 1,
-        asOfRev      = rev
+        asOfRev      = rev,
+        depth        = None
       )
     )
 }

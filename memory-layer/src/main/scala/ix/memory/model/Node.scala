@@ -16,6 +16,8 @@ object NodeKind {
   case object ConfigEntry extends NodeKind
   case object Service     extends NodeKind
   case object Endpoint    extends NodeKind
+  case object Intent      extends NodeKind
+  case object Decision    extends NodeKind
 
   private val nameMap: Map[String, NodeKind] = Map(
     "module"       -> Module,
@@ -26,7 +28,9 @@ object NodeKind {
     "config"       -> Config,
     "config_entry" -> ConfigEntry,
     "service"      -> Service,
-    "endpoint"     -> Endpoint
+    "endpoint"     -> Endpoint,
+    "intent"       -> Intent,
+    "decision"     -> Decision
   )
 
   implicit val encoder: Encoder[NodeKind] = Encoder[String].contramap {
@@ -39,6 +43,8 @@ object NodeKind {
     case ConfigEntry => "config_entry"
     case Service     => "service"
     case Endpoint    => "endpoint"
+    case Intent      => "intent"
+    case Decision    => "decision"
   }
 
   implicit val decoder: Decoder[NodeKind] = Decoder[String].emap { s =>

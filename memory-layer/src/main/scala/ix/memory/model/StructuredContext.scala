@@ -26,11 +26,38 @@ object ConflictReport {
   implicit val decoder: Decoder[ConflictReport] = deriveDecoder[ConflictReport]
 }
 
+final case class DecisionReport(
+  title:    String,
+  rationale: String,
+  entityId: Option[NodeId],
+  intentId: Option[NodeId],
+  rev:      Rev
+)
+
+object DecisionReport {
+  implicit val encoder: Encoder[DecisionReport] = deriveEncoder[DecisionReport]
+  implicit val decoder: Decoder[DecisionReport] = deriveDecoder[DecisionReport]
+}
+
+final case class IntentReport(
+  id:           NodeId,
+  statement:    String,
+  status:       String,
+  confidence:   Double,
+  parentIntent: Option[String]
+)
+
+object IntentReport {
+  implicit val encoder: Encoder[IntentReport] = deriveEncoder[IntentReport]
+  implicit val decoder: Decoder[IntentReport] = deriveDecoder[IntentReport]
+}
+
 final case class ContextMetadata(
   query:        String,
   seedEntities: List[NodeId],
   hopsExpanded: Int,
-  asOfRev:      Rev
+  asOfRev:      Rev,
+  depth:        Option[String]
 )
 
 object ContextMetadata {
@@ -41,6 +68,8 @@ object ContextMetadata {
 final case class StructuredContext(
   claims:    List[ScoredClaim],
   conflicts: List[ConflictReport],
+  decisions: List[DecisionReport],
+  intents:   List[IntentReport],
   nodes:     List[GraphNode],
   edges:     List[GraphEdge],
   metadata:  ContextMetadata

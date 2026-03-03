@@ -22,45 +22,57 @@ object ArangoSchema {
     // Indexes — nodes
     val nodes = db.collection("nodes")
     nodes.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "kind"),
+      java.util.Arrays.asList("kind"),
       new PersistentIndexOptions()
     )
     nodes.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "name"),
+      java.util.Arrays.asList("name"),
       new PersistentIndexOptions().sparse(true)
+    )
+    nodes.ensurePersistentIndex(
+      java.util.Arrays.asList("logical_id"),
+      new PersistentIndexOptions()
     )
 
     // Indexes — edges
     val edges = db.collection("edges")
     edges.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "src"),
+      java.util.Arrays.asList("src"),
       new PersistentIndexOptions()
     )
     edges.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "dst"),
+      java.util.Arrays.asList("dst"),
       new PersistentIndexOptions()
     )
     edges.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "predicate"),
+      java.util.Arrays.asList("predicate"),
       new PersistentIndexOptions()
     )
 
     // Indexes — claims
     val claims = db.collection("claims")
     claims.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "entity_id"),
+      java.util.Arrays.asList("entity_id"),
       new PersistentIndexOptions()
     )
     claims.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "status"),
+      java.util.Arrays.asList("status"),
       new PersistentIndexOptions()
+    )
+    claims.ensurePersistentIndex(
+      java.util.Arrays.asList("statement"),
+      new PersistentIndexOptions().sparse(true)
     )
 
     // Indexes — patches
     val patches = db.collection("patches")
     patches.ensurePersistentIndex(
-      java.util.Arrays.asList("tenant", "patch_id"),
+      java.util.Arrays.asList("patch_id"),
       new PersistentIndexOptions().unique(true)
+    )
+    patches.ensurePersistentIndex(
+      java.util.Arrays.asList("data.source.uri", "data.source.extractor"),
+      new PersistentIndexOptions()
     )
 
     // Indexes — idempotency_keys
