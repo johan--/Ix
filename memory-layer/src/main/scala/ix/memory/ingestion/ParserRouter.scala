@@ -1,20 +1,23 @@
 package ix.memory.ingestion
 
-import ix.memory.ingestion.parsers.{ConfigParser, TreeSitterPythonParser, TypeScriptParser}
+import ix.memory.ingestion.parsers.{ConfigParser, MarkdownParser, TreeSitterPythonParser, TypeScriptParser}
 
 /**
  * Routes file paths to the appropriate language parser.
- * Supports Python (.py), TypeScript (.ts/.tsx), and config files (.json/.yaml/.yml/.toml).
+ * Supports Python (.py), TypeScript (.ts/.tsx), config files (.json/.yaml/.yml/.toml),
+ * and Markdown (.md).
  */
 class ParserRouter {
-  private val pythonParser = new TreeSitterPythonParser()
-  private val tsParser     = new TypeScriptParser()
-  private val configParser = new ConfigParser()
+  private val pythonParser   = new TreeSitterPythonParser()
+  private val tsParser       = new TypeScriptParser()
+  private val configParser   = new ConfigParser()
+  private val markdownParser = new MarkdownParser()
 
   def parserFor(filePath: String): Option[Parser] = {
     if (filePath.endsWith(".py")) Some(pythonParser)
     else if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) Some(tsParser)
     else if (filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml") || filePath.endsWith(".toml")) Some(configParser)
+    else if (filePath.endsWith(".md")) Some(markdownParser)
     else None
   }
 }
