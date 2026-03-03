@@ -13,16 +13,24 @@ import { IxClient } from "../client/api.js";
 // ---------------------------------------------------------------------------
 // Server instructions — sent to the LLM at connection time
 // ---------------------------------------------------------------------------
-const INSTRUCTIONS = `You have access to Ix Memory — a persistent, time-aware memory system for this codebase.
+export const INSTRUCTIONS = `You have access to Ix Memory — a persistent, time-aware knowledge graph for this codebase.
+Ix returns structured context: nodes, edges, claims, conflicts, and decisions — each with confidence scores.
 
 MANDATORY RULES:
-1. ALWAYS call ix_query before answering questions about the codebase
-2. AFTER any design decision, call ix_decide to record it
-3. When you notice conflicting information, call ix_conflicts
-4. NEVER answer from memory alone when Ix has data
-5. After modifying code, call ix_ingest on changed files
-6. At start of each session, review ix://session/context
-7. When the user states a goal, call ix_truth to record it`;
+1. ALWAYS call ix_query before answering questions about the codebase — if you are about to answer and have not called ix_query yet, STOP and call it first
+2. AFTER any design decision, call ix_decide to record it with full reasoning
+3. When you notice conflicting information, call ix_conflicts and present results to the user
+4. NEVER answer from training data alone when Ix has structured data available
+5. After modifying code, call ix_ingest IMMEDIATELY on changed files — not at end of session
+6. At start of each session, review ix://session/context for prior work and decisions
+7. When the user states a goal, call ix_truth to record the intent so decisions trace back to it
+
+BEHAVIORAL CHECKS:
+- About to answer a codebase question? → Did you call ix_query? If not, STOP and call it.
+- Just made a design choice? → Call ix_decide before moving on.
+- Just edited a file? → Call ix_ingest now, not later.
+- See something contradictory? → Call ix_conflicts before proceeding.
+- Low confidence in Ix results? → Tell the user and suggest re-ingesting.`;
 
 // ---------------------------------------------------------------------------
 // Client – uses IX_ENDPOINT env var or defaults to localhost:8090
@@ -42,7 +50,7 @@ const server = new McpServer(
 // --- ix_query ---------------------------------------------------------------
 server.tool(
   "ix_query",
-  "ALWAYS call this tool BEFORE answering any question about the codebase, architecture, or technical decisions. Ix Memory contains structured, versioned knowledge with confidence scores. Never rely on your training data alone when Ix has data available.",
+  "ALWAYS call this tool BEFORE answering any question about the codebase, architecture, or technical decisions. Ix Memory contains structured, versioned knowledge with confidence scores. Never rely on your training data alone when Ix has data available. Results include confidence scores — mention uncertainty to the user when confidence is low.",
   {
     question: z.string().describe("The question to ask the knowledge graph"),
     asOfRev: z.optional(z.number()).describe("Optional revision snapshot"),
@@ -68,7 +76,7 @@ server.tool(
 // --- ix_ingest ---------------------------------------------------------------
 server.tool(
   "ix_ingest",
-  "Ingest source files into the Ix knowledge graph. Call after modifying code so the memory stays current.",
+  "Ingest source files into the Ix knowledge graph. Do this IMMEDIATELY after file changes, not at the end of the session. Stale memory causes wrong answers in future sessions.",
   {
     path: z.string().describe("File or directory path to ingest"),
     recursive: z.optional(z.boolean()).describe("Recurse into subdirectories"),
@@ -95,7 +103,7 @@ server.tool(
 // --- ix_decide ---------------------------------------------------------------
 server.tool(
   "ix_decide",
-  "Record a design decision in the knowledge graph. Always call after making an architectural or design choice.",
+  "Record a design decision in the knowledge graph. Always call after making an architectural or design choice. This creates a permanent record — include the reasoning, not just the conclusion.",
   {
     title: z.string().describe("Short title of the decision"),
     rationale: z.string().describe("Why this decision was made"),
@@ -235,7 +243,7 @@ server.tool(
 // --- ix_conflicts ------------------------------------------------------------
 server.tool(
   "ix_conflicts",
-  "List all detected conflicts in the knowledge graph. Call when you notice contradictory information.",
+  "List all detected conflicts in the knowledge graph. Call when you notice contradictory information. If any conflicts are found, present them to the user before proceeding.",
   {},
   async () => {
     try {
@@ -349,7 +357,7 @@ server.tool(
 // --- ix_truth ----------------------------------------------------------------
 server.tool(
   "ix_truth",
-  "Manage project intents (goals). Use action 'list' to see current intents, or 'add' to record a new goal.",
+  "Manage project intents (goals). Use action 'list' to see current intents, or 'add' to record a new goal. The user's stated goals guide all decisions — always check intents before major work.",
   {
     action: z.enum(["list", "add"]).describe("Action: list or add"),
     statement: z
