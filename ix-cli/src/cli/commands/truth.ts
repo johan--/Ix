@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { formatNodes } from "../format.js";
+import { formatIntents } from "../format.js";
 
 export function registerTruthCommand(program: Command): void {
   const truth = program
@@ -15,7 +15,7 @@ export function registerTruthCommand(program: Command): void {
     .action(async (opts: { format: string }) => {
       const client = new IxClient(getEndpoint());
       const intents = await client.listTruth();
-      formatNodes(intents, opts.format);
+      formatIntents(intents, opts.format);
     });
 
   truth
