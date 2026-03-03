@@ -32,7 +32,14 @@ class ContextService(
 
       // 5. Score each claim
       rev <- asOfRev.fold(queryApi.getLatestRev(tenant))(IO.pure)
-      scored = claims.map(c => confidenceScorer.score(c, rev))
+      scored = claims.map { c =>
+        confidenceScorer.score(c, ScoringContext(
+          latestRev          = rev,
+          sourceChanged      = false,  // Default for Phase 1
+          corroboratingCount = 1,      // Default for Phase 1
+          conflictState      = ConflictState.NoConflict  // Default for Phase 1
+        ))
+      }
 
       // 6. Detect conflicts among scored claims
       conflicts = conflictDetector.detect(scored)

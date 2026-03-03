@@ -46,7 +46,7 @@ class ContextServiceSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
     val seeder    = new GraphSeeder(queryApi)
     val expander  = new GraphExpander(queryApi)
     val collector = new ClaimCollector(queryApi)
-    val scorer    = new DefaultConfidenceScorer()
+    val scorer    = new ConfidenceScorerImpl()
     val detector  = new DefaultConflictDetector()
     new ContextService(queryApi, seeder, expander, collector, scorer, detector)
   }
