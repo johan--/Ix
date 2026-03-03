@@ -98,44 +98,91 @@ class ArangoGraphWriteApi(client: ArangoClient) extends GraphWriteApi {
 
   private def executeOp(op: PatchOp, patch: GraphPatch, newRev: Long, txId: String): IO[Unit] = op match {
     case PatchOp.UpsertNode(id, kind, name, attrs) =>
+      val logicalId = id.value.toString
       val now = Instant.now().toString
       val provenanceJson = buildProvenance(patch)
       val attrsJson = Json.obj(attrs.toSeq.map { case (k, v) => k -> v }: _*).noSpaces
-      client.execute(
-        """UPSERT { _key: @key }
-          |  INSERT {
-          |    _key: @key,
-          |    id: @id,
-          |    kind: @kind,
-          |    name: @name,
-          |    attrs: @attrs,
-          |    created_rev: @created_rev,
-          |    deleted_rev: null,
-          |    provenance: @provenance,
-          |    created_at: @now,
-          |    updated_at: @now
-          |  }
-          |  UPDATE {
-          |    kind: @kind,
-          |    name: @name,
-          |    attrs: @attrs,
-          |    deleted_rev: null,
-          |    provenance: @provenance,
-          |    updated_at: @now
-          |  }
-          |  IN nodes""".stripMargin,
-        Map(
-          "key"         -> id.value.toString.asInstanceOf[AnyRef],
-          "id"          -> id.value.toString.asInstanceOf[AnyRef],
-          "kind"        -> nodeKindToString(kind).asInstanceOf[AnyRef],
-          "name"        -> name.asInstanceOf[AnyRef],
-          "attrs"       -> parseToJavaMap(attrsJson).asInstanceOf[AnyRef],
-          "created_rev" -> Long.box(newRev).asInstanceOf[AnyRef],
-          "provenance"  -> parseToJavaMap(provenanceJson.noSpaces).asInstanceOf[AnyRef],
-          "now"         -> now.asInstanceOf[AnyRef]
-        ),
-        txId = Some(txId)
-      )
+
+      // Check if a live (non-tombstoned) row exists for this logical_id
+      val checkAql = """
+        FOR n IN nodes
+          FILTER n.logical_id == @logicalId
+            AND n.deleted_rev == null
+          RETURN n
+      """
+      for {
+        existing <- client.queryOne(checkAql,
+          Map("logicalId" -> logicalId.asInstanceOf[AnyRef]),
+          txId = Some(txId))
+        _ <- existing match {
+          case Some(existingJson) =>
+            // Node exists — check if attrs actually changed
+            val existingAttrsStr = existingJson.hcursor.downField("attrs").focus
+              .map(_.noSpaces).getOrElse("{}")
+            if (existingAttrsStr == attrsJson) {
+              // Same attrs — idempotent no-op
+              IO.unit
+            } else {
+              // Different attrs — tombstone old row + create new versioned row
+              val existingKey = existingJson.hcursor.get[String]("_key")
+                .getOrElse(logicalId)
+              val tombstoneAql = """
+                UPDATE { _key: @key } WITH { deleted_rev: @rev, updated_at: @now } IN nodes
+                  OPTIONS { waitForSync: true }
+              """
+              val newKey = s"${logicalId}_${newRev}"
+              val insertAql = """
+                INSERT {
+                  _key: @key, logical_id: @logicalId, id: @id, kind: @kind, name: @name,
+                  attrs: @attrs, provenance: @provenance,
+                  created_rev: @rev, deleted_rev: null,
+                  created_at: @now, updated_at: @now
+                } INTO nodes OPTIONS { waitForSync: true }
+              """
+              for {
+                _ <- client.execute(tombstoneAql, Map(
+                  "key" -> existingKey.asInstanceOf[AnyRef],
+                  "rev" -> Long.box(newRev).asInstanceOf[AnyRef],
+                  "now" -> now.asInstanceOf[AnyRef]
+                ), txId = Some(txId))
+                _ <- client.execute(insertAql, Map(
+                  "key"        -> newKey.asInstanceOf[AnyRef],
+                  "logicalId"  -> logicalId.asInstanceOf[AnyRef],
+                  "id"         -> logicalId.asInstanceOf[AnyRef],
+                  "kind"       -> nodeKindToString(kind).asInstanceOf[AnyRef],
+                  "name"       -> name.asInstanceOf[AnyRef],
+                  "attrs"      -> parseToJavaMap(attrsJson).asInstanceOf[AnyRef],
+                  "provenance" -> parseToJavaMap(provenanceJson.noSpaces).asInstanceOf[AnyRef],
+                  "rev"        -> Long.box(newRev).asInstanceOf[AnyRef],
+                  "now"        -> now.asInstanceOf[AnyRef]
+                ), txId = Some(txId))
+              } yield ()
+            }
+
+          case None =>
+            // New node — create first row with versioned key
+            val newKey = s"${logicalId}_${newRev}"
+            val insertAql = """
+              INSERT {
+                _key: @key, logical_id: @logicalId, id: @id, kind: @kind, name: @name,
+                attrs: @attrs, provenance: @provenance,
+                created_rev: @rev, deleted_rev: null,
+                created_at: @now, updated_at: @now
+              } INTO nodes OPTIONS { waitForSync: true }
+            """
+            client.execute(insertAql, Map(
+              "key"        -> newKey.asInstanceOf[AnyRef],
+              "logicalId"  -> logicalId.asInstanceOf[AnyRef],
+              "id"         -> logicalId.asInstanceOf[AnyRef],
+              "kind"       -> nodeKindToString(kind).asInstanceOf[AnyRef],
+              "name"       -> name.asInstanceOf[AnyRef],
+              "attrs"      -> parseToJavaMap(attrsJson).asInstanceOf[AnyRef],
+              "provenance" -> parseToJavaMap(provenanceJson.noSpaces).asInstanceOf[AnyRef],
+              "rev"        -> Long.box(newRev).asInstanceOf[AnyRef],
+              "now"        -> now.asInstanceOf[AnyRef]
+            ), txId = Some(txId))
+        }
+      } yield ()
 
     case PatchOp.UpsertEdge(id, src, dst, predicate, attrs) =>
       val now = Instant.now().toString
@@ -189,10 +236,10 @@ class ArangoGraphWriteApi(client: ArangoClient) extends GraphWriteApi {
     case PatchOp.DeleteNode(id) =>
       client.execute(
         """FOR n IN nodes
-          |  FILTER n._key == @key
+          |  FILTER n.logical_id == @logicalId AND n.deleted_rev == null
           |  UPDATE n WITH { deleted_rev: @deleted_rev } IN nodes""".stripMargin,
         Map(
-          "key"         -> id.value.toString.asInstanceOf[AnyRef],
+          "logicalId"   -> id.value.toString.asInstanceOf[AnyRef],
           "deleted_rev" -> Long.box(newRev).asInstanceOf[AnyRef]
         ),
         txId = Some(txId)

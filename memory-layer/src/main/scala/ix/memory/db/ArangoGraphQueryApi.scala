@@ -21,7 +21,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       rev    <- asOfRev.fold(getLatestRev)(IO.pure)
       result <- client.queryOne(
         """FOR n IN nodes
-          |  FILTER n._key == @id
+          |  FILTER n.logical_id == @id
           |    AND n.created_rev <= @rev
           |    AND (n.deleted_rev == null OR @rev < n.deleted_rev)
           |  RETURN n""".stripMargin,
@@ -128,7 +128,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
                  val idList = new java.util.ArrayList[String]()
                  neighborIds.foreach(nid => idList.add(nid.value.toString))
                  val aql = """FOR n IN nodes
-                             |  FILTER n.id IN @ids
+                             |  FILTER n.logical_id IN @ids
                              |  AND n.created_rev <= @rev AND (n.deleted_rev == null OR @rev < n.deleted_rev)
                              |  RETURN n""".stripMargin
                  client.query(aql, Map(
@@ -182,6 +182,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
     val c = json.hcursor
     val result = for {
       id         <- c.get[String]("id").toOption
+                      .orElse(c.get[String]("logical_id").toOption)
                       .flatMap(s => scala.util.Try(UUID.fromString(s)).toOption)
                       .map(NodeId(_))
       kindStr    <- c.get[String]("kind").toOption
