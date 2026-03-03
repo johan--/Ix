@@ -33,11 +33,12 @@ class ContextService(
 
       // 5. Score each claim for confidence
       rev <- asOfRev.fold(queryApi.getLatestRev)(IO.pure)
+      corroborationMap = CorroborationCounter.count(claims)
       scored = claims.map { c =>
         confidenceScorer.score(c, ScoringContext(
           latestRev          = rev,
           sourceChanged      = false,
-          corroboratingCount = 1,
+          corroboratingCount = corroborationMap.getOrElse(c.id, 0),
           conflictState      = ConflictState.NoConflict,
           intentAlignment    = IntentAlignment.NoConnection,
           observedAt         = c.provenance.observedAt
