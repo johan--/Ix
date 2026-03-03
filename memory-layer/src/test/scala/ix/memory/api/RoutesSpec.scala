@@ -62,7 +62,7 @@ class RoutesSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
       new ConfidenceScorerImpl(),
       new ConflictDetectorImpl()
     )
-    val ingestionService = new IngestionService(new ParserRouter(), writeApi)
+    val ingestionService = new IngestionService(new ParserRouter(), writeApi, queryApi)
     Routes.all(contextService, ingestionService, queryApi, conflictService, client).orNotFound
   }
 

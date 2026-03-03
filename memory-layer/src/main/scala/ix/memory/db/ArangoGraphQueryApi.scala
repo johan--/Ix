@@ -176,6 +176,18 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
     )
   }
 
+  override def getPatchesBySource(sourceUri: String, extractor: String): IO[Vector[Json]] =
+    client.query(
+      """FOR p IN patches
+        |  FILTER p.data.source.uri == @uri AND p.data.source.extractor == @extractor
+        |  SORT p.rev DESC
+        |  RETURN p""".stripMargin,
+      Map(
+        "uri"       -> sourceUri.asInstanceOf[AnyRef],
+        "extractor" -> extractor.asInstanceOf[AnyRef]
+      )
+    ).map(_.toVector)
+
   // ── JSON Parsers (snake_case → camelCase) ───────────────────────────
 
   private def parseNode(json: Json): Option[GraphNode] = {

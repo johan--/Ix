@@ -60,7 +60,7 @@ class EndToEndSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
       val writeApi       = new ArangoGraphWriteApi(client)
       val queryApi       = new ArangoGraphQueryApi(client)
       val parserRouter   = new ParserRouter()
-      val ingestion      = new IngestionService(parserRouter, writeApi)
+      val ingestion      = new IngestionService(parserRouter, writeApi, queryApi)
       val contextService = buildContextService(queryApi)
 
       for {
@@ -105,7 +105,7 @@ class EndToEndSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
       val writeApi       = new ArangoGraphWriteApi(client)
       val queryApi       = new ArangoGraphQueryApi(client)
       val parserRouter   = new ParserRouter()
-      val ingestion      = new IngestionService(parserRouter, writeApi)
+      val ingestion      = new IngestionService(parserRouter, writeApi, queryApi)
       val contextService = buildContextService(queryApi)
 
       for {
@@ -254,7 +254,7 @@ class EndToEndSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
       val writeApi     = new ArangoGraphWriteApi(client)
       val queryApi     = new ArangoGraphQueryApi(client)
       val parserRouter = new ParserRouter()
-      val ingestion    = new IngestionService(parserRouter, writeApi)
+      val ingestion    = new IngestionService(parserRouter, writeApi, queryApi)
 
       for {
         _ <- client.ensureSchema()
@@ -267,8 +267,8 @@ class EndToEndSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
         funcsBefore <- queryApi.findNodesByKind(NodeKind.Function)
         totalBefore  = nodesBefore.size + funcsBefore.size
 
-        // Step 2: Re-ingest the same file with the same content
-        commit2 <- ingestion.ingestFile(fixtureFilePath)
+        // Step 2: Re-ingest the same file with the same content — should be skipped (idempotent)
+        result2 <- ingestion.ingestFile(fixtureFilePath).attempt
 
         // Count nodes after second ingestion
         nodesAfter <- queryApi.findNodesByKind(NodeKind.Class)
@@ -278,10 +278,11 @@ class EndToEndSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers {
         // First ingestion should succeed
         commit1.status shouldBe CommitStatus.Ok
 
-        // Second ingestion should also succeed (new patchId, but upserts are used)
-        commit2.status shouldBe CommitStatus.Ok
+        // Second ingestion should be skipped — hash unchanged
+        result2.isLeft shouldBe true
+        result2.left.exists(_.getMessage.startsWith("Idempotent")) shouldBe true
 
-        // Node count should NOT increase (UPSERT uses deterministic keys)
+        // Node count should NOT increase
         totalAfter shouldBe totalBefore
 
         // The nodes should have the same IDs (deterministic UUID generation)

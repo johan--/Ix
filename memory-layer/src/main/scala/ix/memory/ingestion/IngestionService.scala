@@ -4,14 +4,14 @@ import java.nio.file.{Files, Path}
 
 import cats.effect.IO
 import cats.syntax.all._
-import ix.memory.db.{CommitResult, GraphWriteApi}
-import ix.memory.model.Rev
+import ix.memory.db.{CommitResult, GraphQueryApi, GraphWriteApi}
+import ix.memory.model.{PatchId, Rev}
 
 /**
  * Orchestrates file ingestion: reads source files, parses them,
  * builds graph patches, and commits them through the write API.
  */
-class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi) {
+class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi, queryApi: GraphQueryApi) {
 
   /**
    * Ingest a single file: read, parse, build patch, commit.
@@ -32,7 +32,18 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi) {
           .map("%02x".format(_))
           .mkString
       )
-      patch   = GraphPatchBuilder.build(filePath.toString, hash, result)
+      // Check for existing patch from same source+extractor
+      existing <- queryApi.getPatchesBySource(filePath.toString, "tree-sitter-python/1.0")
+      prevPatch = existing.headOption
+      prevHash  = prevPatch.flatMap(_.hcursor.downField("data").downField("source").get[String]("sourceHash").toOption)
+      // If hash unchanged, skip (idempotent)
+      _ <- if (prevHash == hash) IO.raiseError(new RuntimeException("Idempotent — file unchanged"))
+           else IO.unit
+      prevPatchId = prevPatch.flatMap(_.hcursor.downField("data").get[String]("patchId").toOption)
+                      .flatMap(s => scala.util.Try(java.util.UUID.fromString(s)).toOption)
+                      .map(PatchId(_))
+      replaces = prevPatchId.toVector
+      patch   = GraphPatchBuilder.build(filePath.toString, hash, result).copy(replaces = replaces)
       _      <- IO.fromEither(PatchValidator.validate(patch).left.map(msg => new IllegalStateException(msg)))
       commit <- writeApi.commitPatch(patch)
     } yield commit
@@ -55,10 +66,15 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi) {
       files   <- discoverFiles(path, language, recursive)
       results <- files.traverse(f => ingestFile(f).attempt)
       successes = results.collect { case Right(cr) => cr }
+      idempotentCount = results.count {
+        case Left(e: RuntimeException) if e.getMessage.startsWith("Idempotent") => true
+        case _ => false
+      }
       latestRev = successes.lastOption.map(_.newRev).getOrElse(Rev(0L))
     } yield IngestionResult(
       filesProcessed  = files.size,
       patchesApplied  = successes.size,
+      filesSkipped    = idempotentCount,
       entitiesCreated = 0, // Would need to count from parse results
       latestRev       = latestRev
     )
@@ -98,6 +114,7 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi) {
 case class IngestionResult(
   filesProcessed:  Int,
   patchesApplied:  Int,
+  filesSkipped:    Int,
   entitiesCreated: Int,
   latestRev:       Rev
 )

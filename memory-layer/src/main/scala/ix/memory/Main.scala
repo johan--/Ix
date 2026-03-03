@@ -31,7 +31,7 @@ object Main extends IOApp.Simple {
 
       // 3. Services
       parserRouter     = new ParserRouter()
-      ingestionService = new IngestionService(parserRouter, writeApi)
+      ingestionService = new IngestionService(parserRouter, writeApi, queryApi)
       seeder           = new GraphSeeder(queryApi)
       expander         = new GraphExpander(queryApi)
       claimCollector   = new ClaimCollector(queryApi)
