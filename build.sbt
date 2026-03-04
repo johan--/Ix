@@ -48,7 +48,13 @@ lazy val memoryLayer = (project in file("memory-layer"))
     assembly / mainClass := Some("ix.memory.Main"),
     assembly / assemblyJarName := "ix-memory-layer.jar",
     assembly / assemblyMergeStrategy := {
-      case PathList("META-INF", _*) => MergeStrategy.discard
-      case _                        => MergeStrategy.first
+      case PathList("META-INF", "services", _*)  => MergeStrategy.concat
+      case PathList("META-INF", "versions", _*)  => MergeStrategy.first
+      case PathList("META-INF", "vertx", _*)     => MergeStrategy.first
+      case PathList("META-INF", "native-image", _*) => MergeStrategy.first
+      case PathList("META-INF", "MANIFEST.MF")   => MergeStrategy.discard
+      case PathList("META-INF", _*)               => MergeStrategy.discard
+      case "module-info.class"                    => MergeStrategy.discard
+      case _                                      => MergeStrategy.first
     }
   )

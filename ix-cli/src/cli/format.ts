@@ -116,10 +116,11 @@ export function formatIntents(intents: any[], format: string): void {
   const roots: any[] = [];
 
   for (const intent of intents) {
-    if (intent.parentIntent) {
-      const siblings = childrenMap.get(intent.parentIntent) || [];
+    const parentId = intent.attrs?.parent_intent ?? intent.parentIntent;
+    if (parentId) {
+      const siblings = childrenMap.get(parentId) || [];
       siblings.push(intent);
-      childrenMap.set(intent.parentIntent, siblings);
+      childrenMap.set(parentId, siblings);
     } else {
       roots.push(intent);
     }
@@ -129,11 +130,13 @@ export function formatIntents(intents: any[], format: string): void {
     const prefix = isChild
       ? `${indent}${chalk.dim("\u2514\u2500")} `
       : `${indent}${chalk.magenta(">")} `;
-    const conf = intent.confidence ?? 0;
+    const statement = intent.attrs?.statement ?? intent.statement ?? "(unknown)";
+    const status = intent.attrs?.status ?? intent.status ?? "unknown";
+    const conf = intent.attrs?.confidence ?? intent.confidence ?? 0;
     const pctStr = `(${(conf * 100).toFixed(0)}%)`;
     const color = confidenceColor(conf);
     console.log(
-      `${prefix}${intent.statement} [${intent.status}] ${color(pctStr)}`
+      `${prefix}${statement} [${status}] ${color(pctStr)}`
     );
 
     const children = childrenMap.get(intent.id) || [];

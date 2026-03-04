@@ -14,7 +14,7 @@ export function registerIngestCommand(program: Command): void {
       if (opts.format === "json") {
         console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(`Ingested: rev ${result.newRev} (${result.status})`);
+        console.log(`Ingested: ${(result as any).filesProcessed ?? 0} files, ${(result as any).patchesApplied ?? 0} patches (rev ${(result as any).latestRev ?? 0})`);
       }
     });
 }

@@ -12,9 +12,12 @@ interface McpConfig {
   }>;
 }
 
+// Resolve server.ts relative to this file's location (works regardless of cwd)
+const serverPath = join(new URL(".", import.meta.url).pathname, "../../mcp/server.ts");
+
 const ixMcpEntry = {
   command: "npx",
-  args: ["tsx", join(process.cwd(), "ix-cli/src/mcp/server.ts")],
+  args: ["tsx", serverPath],
   env: {
     IX_ENDPOINT: "http://localhost:8090",
   },
