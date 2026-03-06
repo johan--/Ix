@@ -32,6 +32,22 @@ export interface ScoredClaim {
   finalScore: number;
 }
 
+export interface CompactConfidence {
+  score: number;
+  authority?: number;
+  factors?: Record<string, Factor>;
+}
+
+export interface CompactScoredClaim {
+  entityId: string;
+  field: string;
+  value: unknown;
+  score: number;
+  confidence: CompactConfidence;
+  path?: string;
+  lineRange?: [number, number];
+}
+
 export interface ConflictReport {
   id: string;
   claimA: string;
@@ -93,6 +109,7 @@ export interface ContextMetadata {
 
 export interface StructuredContext {
   claims: ScoredClaim[];
+  compactClaims?: CompactScoredClaim[];
   conflicts: ConflictReport[];
   decisions: DecisionReport[];
   intents: IntentReport[];

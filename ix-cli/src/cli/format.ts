@@ -24,16 +24,28 @@ export function formatContext(result: any, format: string): void {
     )
   );
 
-  if (claims && claims.length > 0) {
-    console.log(`\nClaims (${claims.length}):`);
-    for (const sc of claims.slice(0, 10)) {
-      const pct = sc.finalScore * 100;
-      const conf = pct.toFixed(0);
-      const color = confidenceColor(sc.finalScore);
-      console.log(`  ${color(`[${conf}%]`)} ${sc.claim.statement}`);
+  const useCompact = result.compactClaims?.length > 0;
+  const displayClaims = useCompact ? result.compactClaims : (claims || []);
+  const maxShow = 10;
+
+  if (displayClaims.length > 0) {
+    console.log(chalk.bold("\nClaims:"));
+    displayClaims.slice(0, maxShow).forEach((c: any) => {
+      if (useCompact) {
+        const pct = Math.round((c.score ?? 0) * 100);
+        const color = confidenceColor(c.score ?? 0);
+        const loc = c.lineRange ? `:${c.lineRange[0]}-${c.lineRange[1]}` : '';
+        const pathStr = c.path ? chalk.dim(` (${c.path}${loc})`) : '';
+        console.log(`  ${color(`[${pct}%]`)} ${c.field}${pathStr}`);
+      } else {
+        const pct = Math.round((c.finalScore ?? 0) * 100);
+        const color = confidenceColor(c.finalScore ?? 0);
+        console.log(`  ${color(`[${pct}%]`)} ${c.claim?.statement || 'unknown'}`);
+      }
+    });
+    if (displayClaims.length > maxShow) {
+      console.log(chalk.dim(`  ... and ${displayClaims.length - maxShow} more`));
     }
-    if (claims.length > 10)
-      console.log(chalk.dim(`  ... and ${claims.length - 10} more`));
   }
 
   if (conflicts && conflicts.length > 0) {

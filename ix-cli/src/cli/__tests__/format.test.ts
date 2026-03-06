@@ -122,7 +122,7 @@ describe("formatContext", () => {
     // Metadata
     expect(plain).toContain("Seeds: 2 | Hops: 2 | Rev: 10");
     // Claims section
-    expect(plain).toContain("Claims (2):");
+    expect(plain).toContain("Claims:");
     expect(plain).toContain("[95%]");
     expect(plain).toContain("Claim A");
     expect(plain).toContain("[40%]");
@@ -136,6 +136,31 @@ describe("formatContext", () => {
     // Intents
     expect(plain).toContain("Intents (1):");
     expect(plain).toContain("> Build feature [active]");
+  });
+
+  it("formats compact claims with path and score", () => {
+    const result = {
+      compactClaims: [{
+        entityId: "abc-123",
+        field: "defines:parseClaim",
+        value: "parseClaim",
+        score: 0.9,
+        confidence: { score: 0.9, authority: 0.9 },
+        path: "src/main/scala/ix/memory/ingestion/Parser.scala",
+        lineRange: [42, 67] as [number, number]
+      }],
+      claims: [],
+      conflicts: [],
+      decisions: [],
+      intents: [],
+      metadata: { query: "parseClaim", seedEntities: [], hopsExpanded: 1, asOfRev: 5 }
+    };
+    const output = captureLog(() => formatContext(result, "text"));
+    const clean = stripAnsi(output);
+    expect(clean).toContain("90%");
+    expect(clean).toContain("defines:parseClaim");
+    expect(clean).toContain("Parser.scala");
+    expect(clean).toContain("42-67");
   });
 
   it("shows truncation message when more than 10 claims", () => {
