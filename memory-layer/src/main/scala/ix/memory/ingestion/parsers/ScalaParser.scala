@@ -1,6 +1,6 @@
 package ix.memory.ingestion.parsers
 
-import ix.memory.ingestion.{ParseResult, ParsedEntity, ParsedRelationship}
+import ix.memory.ingestion.{Parser, ParseResult, ParsedEntity, ParsedRelationship}
 import ix.memory.model.NodeKind
 import io.circe.Json
 
@@ -12,7 +12,7 @@ import scala.util.matching.Regex
  * Extracts: traits, classes, case classes, objects, methods (def), and imports.
  * Uses brace counting for block boundary detection.
  */
-class ScalaParser {
+class ScalaParser extends Parser {
 
   // Patterns for Scala constructs
   private val TraitPattern: Regex      = """^\s*(?:sealed\s+|abstract\s+|private\s+|protected\s+)*trait\s+(\w+)""".r

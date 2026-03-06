@@ -36,6 +36,7 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi, quer
       val fp = filePath.toString
       extractor = if (fp.endsWith(".py")) "tree-sitter-python/1.0"
                   else if (fp.endsWith(".ts") || fp.endsWith(".tsx")) "typescript-parser/1.0"
+                  else if (fp.endsWith(".scala") || fp.endsWith(".sc")) "scala-parser/1.0"
                   else if (fp.endsWith(".json") || fp.endsWith(".yaml") || fp.endsWith(".yml") || fp.endsWith(".toml") || fp.endsWith(".ini") || fp.endsWith(".conf") || fp.endsWith(".properties") || fp.endsWith(".env")) "config-parser/1.0"
                   else if (fp.endsWith(".md") || fp.endsWith(".mdx") || fp.endsWith(".rst") || fp.endsWith(".txt")) "markdown-parser/1.0"
                   else "text-parser/1.0"
@@ -96,6 +97,7 @@ class IngestionService(parserRouter: ParserRouter, writeApi: GraphWriteApi, quer
     val extensions = language match {
       case Some("python")     => Set(".py")
       case Some("typescript") => Set(".ts", ".tsx")
+      case Some("scala")      => Set(".scala", ".sc")
       case Some("config")     => Set(".json", ".yaml", ".yml", ".toml")
       case Some("markdown")   => Set(".md")
       case _ => Set(
