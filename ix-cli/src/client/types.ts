@@ -75,6 +75,7 @@ export interface IntentReport {
 export interface GraphNode {
   id: string;
   kind: string;
+  name: string;
   attrs: Record<string, unknown>;
   provenance: {
     sourceUri: string;

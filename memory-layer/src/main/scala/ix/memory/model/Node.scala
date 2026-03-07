@@ -70,6 +70,7 @@ object NodeKind {
 final case class GraphNode(
   id:         NodeId,
   kind:       NodeKind,
+  name:       String,
   attrs:      Json,
   provenance: Provenance,
   createdRev: Rev,

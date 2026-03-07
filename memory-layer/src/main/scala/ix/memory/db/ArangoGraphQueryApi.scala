@@ -343,6 +343,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
                       .map(NodeId(_))
       kindStr    <- c.get[String]("kind").toOption
       kind       <- NodeKind.decoder.decodeJson(Json.fromString(kindStr)).toOption
+      name        = c.get[String]("name").getOrElse("")
       attrs      <- c.get[Json]("attrs").toOption
       provenance <- parseProvenance(c.downField("provenance").focus)
       createdRev <- c.get[Long]("created_rev").toOption.map(Rev(_))
@@ -351,7 +352,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
                       .flatMap(s => scala.util.Try(Instant.parse(s)).toOption)
       updatedAt  <- c.get[String]("updated_at").toOption
                       .flatMap(s => scala.util.Try(Instant.parse(s)).toOption)
-    } yield GraphNode(id, kind, attrs, provenance, createdRev, deletedRev, createdAt, updatedAt)
+    } yield GraphNode(id, kind, name, attrs, provenance, createdRev, deletedRev, createdAt, updatedAt)
     if (result.isEmpty) log.warn("Failed to parse node from JSON: {}", json.noSpaces.take(200))
     result
   }
