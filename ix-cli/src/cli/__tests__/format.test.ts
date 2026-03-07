@@ -3,6 +3,7 @@ import {
   formatContext,
   formatIntents,
   formatConflicts,
+  formatDecisions,
   confidenceColor,
 } from "../format.js";
 
@@ -267,5 +268,37 @@ describe("formatConflicts", () => {
     expect(plain).toContain("! Data contradicts policy");
     expect(plain).toContain("Review the source");
     expect(plain).toContain("Claims: claim-aaa vs claim-bbb");
+  });
+});
+
+describe("formatDecisions", () => {
+  it("should output JSON when format is json", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const decisions = [
+      { id: "abc-123", kind: "decision", attrs: { title: "Use ArangoDB", rationale: "Supports MVCC" } }
+    ];
+    formatDecisions(decisions, "json");
+    expect(spy).toHaveBeenCalledWith(JSON.stringify(decisions, null, 2));
+    spy.mockRestore();
+  });
+
+  it("should show 'No decisions found.' for empty list", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    formatDecisions([], "text");
+    expect(spy).toHaveBeenCalledWith("No decisions found.");
+    spy.mockRestore();
+  });
+
+  it("should display title and rationale in text mode", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const decisions = [
+      { id: "abc-12345-def", kind: "decision", attrs: { title: "Use ArangoDB", rationale: "Supports MVCC" } }
+    ];
+    formatDecisions(decisions, "text");
+    const output = spy.mock.calls.map(c => c[0]).join("\n");
+    expect(output).toContain("Use ArangoDB");
+    expect(output).toContain("Supports MVCC");
+    expect(output).toContain("abc-1234");
+    spy.mockRestore();
   });
 });
