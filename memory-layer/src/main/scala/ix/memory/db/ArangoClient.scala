@@ -3,7 +3,8 @@ package ix.memory.db
 import cats.effect.{IO, Resource}
 import cats.syntax.traverse._
 import com.arangodb.{ArangoDB, ArangoDatabase}
-import com.arangodb.model.{AqlQueryOptions, StreamTransactionOptions}
+import com.arangodb.entity.MultiDocumentEntity
+import com.arangodb.model.{AqlQueryOptions, DocumentCreateOptions, OverwriteMode, StreamTransactionOptions}
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.circe.Json
 import io.circe.parser.{parse => parseJson}
@@ -54,6 +55,30 @@ class ArangoClient private (db: ArangoDatabase) {
       db.query(aql, classOf[Void], asJava(bindVars), queryOptions(txId))
       ()
     }
+
+  /** Bulk insert/replace documents into a collection. Uses Document API (not AQL). */
+  def bulkInsert(
+    collection: String,
+    documents: Seq[java.util.Map[String, AnyRef]],
+    overwriteMode: String = "replace"
+  ): IO[Int] =
+    if (documents.isEmpty) IO.pure(0)
+    else IO.blocking {
+      val opts = new DocumentCreateOptions()
+        .overwriteMode(OverwriteMode.valueOf(overwriteMode))
+        .waitForSync(false)
+      val docs = new java.util.ArrayList[java.util.Map[String, AnyRef]](documents.size)
+      documents.foreach(docs.add)
+      val result = db.collection(collection).insertDocuments(docs, opts)
+      documents.size - result.getErrors.size
+    }
+
+  /** Bulk insert edge documents. Same as bulkInsert but for edge collections. */
+  def bulkInsertEdges(
+    collection: String,
+    documents: Seq[java.util.Map[String, AnyRef]],
+    overwriteMode: String = "replace"
+  ): IO[Int] = bulkInsert(collection, documents, overwriteMode)
 
   // ── Stream Transaction lifecycle ──────────────────────────────────
 
