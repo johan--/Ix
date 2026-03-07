@@ -457,6 +457,68 @@ server.tool(
   },
 );
 
+// --- ix_text -----------------------------------------------------------------
+server.tool(
+  "ix_text",
+  "Fast lexical/text search across the codebase. Use for exact string matches, symbol lookups, and filename searches. For semantic questions use ix_query instead.",
+  {
+    term: z.string().describe("Text/pattern to search for"),
+    limit: z.optional(z.number()).describe("Max results (default 20)"),
+    path: z.optional(z.string()).describe("Restrict search to a directory path"),
+  },
+  async ({ term, limit, path }) => {
+    try {
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+
+      const maxResults = limit ?? 20;
+      const searchPath = path ?? ".";
+      const { stdout } = await execFileAsync("rg", [
+        "--json",
+        "--max-count", String(maxResults),
+        "--no-heading",
+        term,
+        searchPath,
+      ], { maxBuffer: 10 * 1024 * 1024 });
+
+      const results: Array<{ path: string; line: number; snippet: string }> = [];
+      for (const line of stdout.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === "match") {
+            const data = parsed.data;
+            results.push({
+              path: data.path?.text ?? "",
+              line: data.line_number ?? 0,
+              snippet: (data.lines?.text ?? "").trim(),
+            });
+          }
+        } catch { /* skip */ }
+      }
+
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(results.slice(0, maxResults), null, 2) },
+        ],
+      };
+    } catch (err: any) {
+      if (err.code === 1 || err.status === 1) {
+        return {
+          content: [{ type: "text" as const, text: "[]" }],
+        };
+      }
+      return {
+        isError: true,
+        content: [
+          { type: "text" as const, text: `ix_text failed: ${String(err)}` },
+        ],
+      };
+    }
+  },
+);
+
 // --- ix_patches --------------------------------------------------------------
 server.tool(
   "ix_patches",
