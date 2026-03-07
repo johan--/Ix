@@ -111,65 +111,13 @@ class BulkIngestionService(
     language: Option[String],
     recursive: Boolean
   ): IO[List[Path]] = IO.blocking {
-    import scala.jdk.CollectionConverters._
-
-    val extensions = language match {
-      case Some("python")     => Set(".py")
-      case Some("typescript") => Set(".ts", ".tsx")
-      case Some("scala")      => Set(".scala", ".sc")
-      case Some("config")     => Set(".json", ".yaml", ".yml", ".toml")
-      case Some("markdown")   => Set(".md")
-      case _ => Set(
-        ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-        ".java", ".scala", ".sc", ".go", ".rs", ".c", ".h", ".cc", ".cpp", ".hpp",
-        ".kt", ".kts", ".swift", ".rb", ".php",
-        ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".env", ".properties",
-        ".md", ".mdx", ".rst", ".txt"
-      )
-    }
-
-    val specialFiles = Set("Dockerfile", "Makefile", "README", "LICENSE", "NOTICE", "build.sbt")
-
+    val extensions = FileDiscovery.extensionsFor(language)
     if (Files.isRegularFile(path)) {
-      val base = path.getFileName.toString
-      if (specialFiles.contains(base) || extensions.exists(base.endsWith)) List(path)
-      else List.empty
+      if (FileDiscovery.matchesFilter(path, extensions)) List(path) else List.empty
     } else if (Files.isDirectory(path)) {
-      if (recursive) {
-        val ignoredDirs = Set(
-          "node_modules", ".git", "target", "dist", "build", ".next",
-          "__pycache__", ".tox", ".venv", "venv", ".mypy_cache",
-          ".gradle", ".idea", ".vscode", ".settings", "out",
-          ".cache", ".parcel-cache", "coverage", ".nyc_output"
-        )
-        val result = scala.collection.mutable.ListBuffer.empty[Path]
-        Files.walkFileTree(path, new java.nio.file.SimpleFileVisitor[Path] {
-          override def preVisitDirectory(dir: Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult = {
-            if (dir != path && ignoredDirs.contains(dir.getFileName.toString))
-              java.nio.file.FileVisitResult.SKIP_SUBTREE
-            else
-              java.nio.file.FileVisitResult.CONTINUE
-          }
-          override def visitFile(file: Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult = {
-            val base = file.getFileName.toString
-            if (specialFiles.contains(base) || extensions.exists(base.endsWith))
-              result += file
-            java.nio.file.FileVisitResult.CONTINUE
-          }
-        })
-        result.toList
-      } else {
-        val stream = Files.list(path)
-        try {
-          stream.iterator().asScala
-            .filter(Files.isRegularFile(_))
-            .filter { p =>
-              val base = p.getFileName.toString
-              specialFiles.contains(base) || extensions.exists(base.endsWith)
-            }
-            .toList
-        } finally stream.close()
-      }
+      // Try git ls-files first (respects .gitignore), fall back to manual walk
+      FileDiscovery.tryGitLsFiles(path, recursive, extensions)
+        .getOrElse(FileDiscovery.walkFiles(path, recursive, extensions))
     } else List.empty
   }
 
