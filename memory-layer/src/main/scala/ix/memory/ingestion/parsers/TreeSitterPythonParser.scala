@@ -127,7 +127,7 @@ class TreeSitterPythonParser extends Parser {
         enclosingClass match {
           case Some((className, _, _)) =>
             // Method inside a class
-            relationships = relationships :+ ParsedRelationship(className, funcName, "DEFINES")
+            relationships = relationships :+ ParsedRelationship(className, funcName, "CONTAINS")
           case None =>
             // Top-level function — file defines it
             relationships = relationships :+ ParsedRelationship(fileName, funcName, "DEFINES")
