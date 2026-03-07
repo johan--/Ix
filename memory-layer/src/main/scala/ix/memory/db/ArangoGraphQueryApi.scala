@@ -82,11 +82,20 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
         |    RETURN DISTINCT n.logical_id
         |)
         |
-        |LET all_ids = UNION_DISTINCT(name_matches, provenance_matches, claim_matches, decision_matches)
+        |LET attr_matches = (
+        |  FOR n IN nodes
+        |    FILTER n.deleted_rev == null
+        |      AND CONTAINS(LOWER(TO_STRING(n.attrs)), LOWER(@text))
+        |    RETURN DISTINCT n.logical_id
+        |)
+        |
+        |LET all_ids = UNION_DISTINCT(name_matches, provenance_matches, claim_matches, decision_matches, attr_matches)
         |
         |FOR id IN all_ids
         |  FOR n IN nodes
         |    FILTER n.logical_id == id AND n.deleted_rev == null
+        |  LET symbol_priority = n.kind IN ["function", "method", "class", "trait", "object", "interface"] ? 0 : 1
+        |  SORT symbol_priority ASC, n.name ASC
         |  LIMIT @limit
         |  RETURN n""".stripMargin,
       Map(
