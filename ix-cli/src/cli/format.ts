@@ -211,6 +211,30 @@ export function formatDiff(result: any, format: string): void {
   }
 }
 
+export interface TextResult {
+  path: string;
+  line: number;
+  snippet: string;
+  score?: number;
+  symbol?: string;
+}
+
+export function formatTextResults(results: TextResult[], format: string): void {
+  if (format === "json") {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  if (results.length === 0) {
+    console.log("No text matches found.");
+    return;
+  }
+  for (const r of results) {
+    console.log(
+      `  ${chalk.dim(r.path)}${chalk.cyan(":" + r.line)}  ${r.snippet.trim()}`
+    );
+  }
+}
+
 export function formatConflicts(conflicts: any[], format: string): void {
   if (format === "json") {
     console.log(JSON.stringify(conflicts, null, 2));
