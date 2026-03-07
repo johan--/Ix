@@ -308,6 +308,30 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       scala.util.Try(java.util.UUID.fromString(s)).toOption.map(NodeId(_))
     ).toVector)
 
+  override def getSourceHashes(sourceUris: Seq[String]): IO[Map[String, String]] = {
+    if (sourceUris.isEmpty) IO.pure(Map.empty)
+    else {
+      val uriList = new java.util.ArrayList[String](sourceUris.size)
+      sourceUris.foreach(uriList.add)
+      client.query(
+        """FOR p IN patches
+          |  FILTER p.data.source.uri IN @uris
+          |  SORT p.rev DESC
+          |  COLLECT uri = p.data.source.uri INTO groups
+          |  LET latest = FIRST(groups)
+          |  RETURN { uri: uri, hash: latest.p.data.source.sourceHash }""".stripMargin,
+        Map("uris" -> uriList.asInstanceOf[AnyRef])
+      ).map { results =>
+        results.flatMap { json =>
+          for {
+            uri  <- json.hcursor.get[String]("uri").toOption
+            hash <- json.hcursor.get[String]("hash").toOption
+          } yield uri -> hash
+        }.toMap
+      }
+    }
+  }
+
   // ── JSON Parsers (snake_case → camelCase) ───────────────────────────
 
   private def parseNode(json: Json): Option[GraphNode] = {

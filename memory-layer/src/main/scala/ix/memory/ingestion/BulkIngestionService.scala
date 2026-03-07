@@ -90,14 +90,10 @@ class BulkIngestionService(
     } yield result
   }
 
-  /**
-   * Load existing source hashes from the database for quick local comparison.
-   * Returns Map[filePath -> hash].
-   * TODO: Will be populated by Task 5 (getSourceHashes method on GraphQueryApi).
-   * For now, returns empty map — every file is treated as changed.
-   */
-  private def loadExistingHashes(files: List[Path]): IO[Map[String, String]] =
-    IO.pure(Map.empty[String, String])
+  private def loadExistingHashes(files: List[Path]): IO[Map[String, String]] = {
+    val paths = files.map(_.toString)
+    queryApi.getSourceHashes(paths)
+  }
 
   private def buildProvenanceMap(patch: GraphPatch): java.util.Map[String, AnyRef] = {
     val json = Json.obj(
