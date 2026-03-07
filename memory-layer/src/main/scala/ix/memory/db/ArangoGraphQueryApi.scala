@@ -4,6 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import cats.effect.IO
+import cats.syntax.all._
 import io.circe.Json
 
 import org.slf4j.LoggerFactory
@@ -282,18 +283,27 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       )
     ).map(_.toVector)
 
-  override def getChangedEntities(fromRev: Rev, toRev: Rev): IO[Vector[GraphNode]] =
-    client.query(
-      """FOR n IN nodes
-        |  FILTER n.created_rev > @fromRev AND n.created_rev <= @toRev
-        |  COLLECT logicalId = n.logical_id INTO group
-        |  LET latest = LAST(group[*].n)
-        |  RETURN latest""".stripMargin,
-      Map(
+  override def getChangedEntities(fromRev: Rev, toRev: Rev): IO[Vector[(GraphNode, Option[GraphNode])]] = {
+    val changedIdsAql = """
+      FOR n IN nodes
+        FILTER n.created_rev > @fromRev AND n.created_rev <= @toRev
+        COLLECT logicalId = n.logical_id
+        RETURN logicalId
+    """
+    for {
+      logicalIds <- client.query(changedIdsAql, Map(
         "fromRev" -> Long.box(fromRev.value).asInstanceOf[AnyRef],
         "toRev"   -> Long.box(toRev.value).asInstanceOf[AnyRef]
-      )
-    ).map(_.flatMap(parseNode).toVector)
+      )).map(_.flatMap(_.asString).toVector)
+      results <- logicalIds.traverse { lid =>
+        val nodeId = NodeId(java.util.UUID.fromString(lid))
+        for {
+          atFrom <- getNode(nodeId, asOfRev = Some(fromRev))
+          atTo   <- getNode(nodeId, asOfRev = Some(toRev))
+        } yield atTo.map(to => (to, atFrom))
+      }
+    } yield results.flatten
+  }
 
   override def resolvePrefix(prefix: String): IO[Vector[NodeId]] =
     client.query(

@@ -20,10 +20,11 @@ object DiffRequest {
 }
 
 case class DiffEntry(
-  entityId:  NodeId,
+  entityId:   NodeId,
   changeType: String,    // "added", "removed", "modified"
   atFromRev:  Option[GraphNode],
-  atToRev:    Option[GraphNode]
+  atToRev:    Option[GraphNode],
+  summary:    Option[String]
 )
 
 object DiffEntry {
@@ -53,13 +54,20 @@ class DiffRoutes(queryApi: GraphQueryApi) {
               result <- diffEntity(eid, Rev(body.fromRev), Rev(body.toRev))
             } yield result.toVector
           case None =>
-            queryApi.getChangedEntities(Rev(body.fromRev), Rev(body.toRev)).map { nodes =>
-              nodes.map { n =>
+            queryApi.getChangedEntities(Rev(body.fromRev), Rev(body.toRev)).map { pairs =>
+              pairs.map { case (atTo, atFromOpt) =>
+                val changeType = if (atFromOpt.isEmpty) "added"
+                                 else if (atTo.deletedRev.isDefined) "removed"
+                                 else "modified"
+                val summary = atFromOpt.map { atFrom =>
+                  diffAttrs(atFrom.attrs, atTo.attrs)
+                }
                 DiffEntry(
-                  entityId   = n.id,
-                  changeType = if (n.deletedRev.isDefined) "removed" else "added_or_modified",
-                  atFromRev  = None,
-                  atToRev    = Some(n)
+                  entityId   = atTo.id,
+                  changeType = changeType,
+                  atFromRev  = atFromOpt,
+                  atToRev    = Some(atTo),
+                  summary    = summary.filter(_.nonEmpty)
                 )
               }
             }
@@ -77,14 +85,30 @@ class DiffRoutes(queryApi: GraphQueryApi) {
     } yield {
       (atFrom, atTo) match {
         case (None, None)       => None
-        case (None, Some(_))    => Some(DiffEntry(nodeId, "added", None, atTo))
-        case (Some(_), None)    => Some(DiffEntry(nodeId, "removed", atFrom, None))
+        case (None, Some(_))    => Some(DiffEntry(nodeId, "added", None, atTo, None))
+        case (Some(_), None)    => Some(DiffEntry(nodeId, "removed", atFrom, None, None))
         case (Some(a), Some(b)) =>
           if (a.updatedAt != b.updatedAt || a.attrs != b.attrs)
-            Some(DiffEntry(nodeId, "modified", Some(a), Some(b)))
+            Some(DiffEntry(nodeId, "modified", Some(a), Some(b), Some(diffAttrs(a.attrs, b.attrs)).filter(_.nonEmpty)))
           else
             None
       }
     }
+
+  private def diffAttrs(from: io.circe.Json, to: io.circe.Json): String = {
+    val fromFields = from.asObject.map(_.keys.toSet).getOrElse(Set.empty)
+    val toFields   = to.asObject.map(_.keys.toSet).getOrElse(Set.empty)
+    val added   = (toFields -- fromFields).size
+    val removed = (fromFields -- toFields).size
+    val changed = (fromFields intersect toFields).count { k =>
+      from.hcursor.downField(k).focus != to.hcursor.downField(k).focus
+    }
+    val parts = List(
+      if (added > 0) Some(s"+$added attrs") else None,
+      if (removed > 0) Some(s"-$removed attrs") else None,
+      if (changed > 0) Some(s"~$changed attrs") else None
+    ).flatten
+    parts.mkString(", ")
+  }
 
 }

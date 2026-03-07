@@ -18,7 +18,7 @@ trait GraphQueryApi {
   def getLatestRev: IO[Rev]
   def getPatchesForEntity(entityId: NodeId): IO[List[Json]]
   def getPatchesBySource(sourceUri: String, extractor: String): IO[Vector[Json]]
-  def getChangedEntities(fromRev: Rev, toRev: Rev): IO[Vector[GraphNode]]
+  def getChangedEntities(fromRev: Rev, toRev: Rev): IO[Vector[(GraphNode, Option[GraphNode])]]
   def resolvePrefix(prefix: String): IO[Vector[NodeId]]
   def getSourceHashes(sourceUris: Seq[String]): IO[Map[String, String]]
 }
