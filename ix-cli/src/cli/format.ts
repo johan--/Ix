@@ -240,6 +240,34 @@ export function formatTextResults(results: TextResult[], format: string): void {
   }
 }
 
+export interface LocateResult {
+  kind: string;
+  id?: string;
+  name: string;
+  file?: string;
+  line?: number;
+  source: "graph" | "ripgrep";
+}
+
+export function formatLocateResults(results: LocateResult[], format: string): void {
+  if (format === "json") {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  if (results.length === 0) {
+    console.log("No matches found.");
+    return;
+  }
+  for (const r of results) {
+    const shortId = r.id ? chalk.dim(r.id.slice(0, 8)) + "  " : "";
+    const filePart = r.file ? chalk.dim(r.file) + (r.line ? chalk.cyan(`:${r.line}`) : "") : "";
+    console.log(`  ${chalk.cyan(r.kind)}  ${shortId}${chalk.bold(r.name)}`);
+    if (filePart) {
+      console.log(`    ${filePart}`);
+    }
+  }
+}
+
 export function formatConflicts(conflicts: any[], format: string): void {
   if (format === "json") {
     console.log(JSON.stringify(conflicts, null, 2));
@@ -254,4 +282,37 @@ export function formatConflicts(conflicts: any[], format: string): void {
     console.log(`    ${chalk.yellow(c.recommendation)}`);
     console.log(`    Claims: ${c.claimA} vs ${c.claimB}`);
   }
+}
+
+export interface ExplainResult {
+  kind: string;
+  name: string;
+  id: string;
+  file?: string;
+  container?: { kind: string; name: string };
+  introducedRev: number;
+  calledBy: number;
+  calls: number;
+  contains: number;
+  historyLength: number;
+}
+
+export function formatExplain(result: ExplainResult, format: string): void {
+  if (format === "json") {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const shortId = result.id.slice(0, 8);
+  console.log(`  ${chalk.cyan(result.kind)} ${chalk.bold(result.name)} ${chalk.dim(shortId)}`);
+  if (result.container) {
+    console.log(`  ${chalk.dim("in")} ${chalk.cyan(result.container.kind)} ${result.container.name}`);
+  }
+  if (result.file) {
+    console.log(`  ${chalk.dim("file")} ${result.file}`);
+  }
+  console.log(`  ${chalk.dim("introduced rev")} ${result.introducedRev}`);
+  if (result.calledBy > 0) console.log(`  ${chalk.dim("called by")} ${result.calledBy} methods`);
+  if (result.calls > 0) console.log(`  ${chalk.dim("calls")} ${result.calls} methods`);
+  if (result.contains > 0) console.log(`  ${chalk.dim("contains")} ${result.contains} members`);
+  if (result.historyLength > 0) console.log(`  ${chalk.dim("history")} ${result.historyLength} patches`);
 }

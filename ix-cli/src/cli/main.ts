@@ -15,6 +15,8 @@ import { registerDiffCommand } from "./commands/diff.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerMcpInstallCommand } from "./commands/mcp-install.js";
 import { registerTextCommand } from "./commands/text.js";
+import { registerLocateCommand } from "./commands/locate.js";
+import { registerExplainCommand } from "./commands/explain.js";
 
 const program = new Command();
 program
@@ -37,6 +39,8 @@ registerDiffCommand(program);
 registerInitCommand(program);
 registerMcpInstallCommand(program);
 registerTextCommand(program);
+registerLocateCommand(program);
+registerExplainCommand(program);
 
 program
   .command("mcp-start")
