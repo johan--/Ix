@@ -60,7 +60,7 @@ class BulkIngestionService(
       skippedCount   = unchangedCount + emptyCount + errorCount + tooLargeCount
       latestRev  <- queryApi.getLatestRev
       result     <- if (validBatches.isEmpty) IO.pure(CommitResult(latestRev, CommitStatus.Ok))
-                    else bulkWriteApi.commitBatch(validBatches.toVector, latestRev.value)
+                    else bulkWriteApi.commitBatchChunked(validBatches.toVector, latestRev.value)
     } yield IngestionResult(
       filesProcessed  = files.size,
       patchesApplied  = validBatches.size,

@@ -83,6 +83,27 @@ class BulkWriteApi(client: ArangoClient) {
     }
   }
 
+  /**
+   * Commit file batches in chunks. Each chunk gets its own revision.
+   * If a chunk fails, prior chunks are preserved (partial progress).
+   */
+  def commitBatchChunked(
+    fileBatches: Vector[FileBatch],
+    baseRev: Long,
+    chunkSize: Int = 100
+  ): IO[CommitResult] = {
+    if (fileBatches.isEmpty)
+      return IO.pure(CommitResult(Rev(baseRev), CommitStatus.Ok))
+
+    val chunks = fileBatches.grouped(chunkSize).toVector
+
+    chunks.foldLeft(IO.pure(baseRev)) { case (revIO, chunk) =>
+      revIO.flatMap { currentRev =>
+        commitBatch(chunk, currentRev).map(_.newRev.value)
+      }
+    }.map(finalRev => CommitResult(Rev(finalRev), CommitStatus.Ok))
+  }
+
   private def updateRevision(newRev: Long): IO[Unit] =
     client.execute(
       """UPSERT { _key: @key }
