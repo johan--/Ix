@@ -1,8 +1,13 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { Command } from "commander";
+import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatEdgeResults } from "../format.js";
 import { resolveEntity, printResolved } from "../resolve.js";
+
+const execFileAsync = promisify(execFile);
 
 export function registerCallersCommand(program: Command): void {
   program
@@ -21,7 +26,56 @@ export function registerCallersCommand(program: Command): void {
         predicates: ["CALLS"],
         kinds: ["function", "method"],
       });
-      formatEdgeResults(result.nodes, "callers", target.name, opts.format, target, "graph");
+
+      if (result.nodes.length === 0) {
+        // Fallback to text search
+        try {
+          const root = resolveWorkspaceRoot();
+          const { stdout } = await execFileAsync("rg", [
+            "--json", "--max-count", "10", target.name, root,
+          ], { maxBuffer: 5 * 1024 * 1024 });
+
+          const textResults: any[] = [];
+          for (const line of stdout.split("\n")) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.type === "match") {
+                const data = parsed.data;
+                textResults.push({
+                  id: "",
+                  kind: "text-match",
+                  name: `${data.path?.text ?? ""}:${data.line_number ?? 0}`,
+                  attrs: { snippet: data.lines?.text?.trim() ?? "" },
+                });
+              }
+            } catch { /* skip malformed lines */ }
+          }
+
+          if (textResults.length > 0) {
+            if (opts.format === "json") {
+              console.log(JSON.stringify({
+                results: textResults,
+                resultSource: "text",
+                resolvedTarget: target,
+                warning: "No graph-backed callers found; showing text-based candidate usages.",
+              }, null, 2));
+            } else {
+              console.log(chalk.dim("No graph-backed callers found. Showing text-based candidate usages.\n"));
+              for (const r of textResults.slice(0, 10)) {
+                const snippet = r.attrs?.snippet ?? "";
+                console.log(`  ${chalk.dim(r.name)}  ${snippet}`);
+              }
+            }
+            return;
+          }
+        } catch { /* ripgrep not available or no matches */ }
+
+        // Both graph and text empty
+        formatEdgeResults([], "callers", target.name, opts.format, target, "graph");
+      } else {
+        formatEdgeResults(result.nodes, "callers", target.name, opts.format, target, "graph");
+      }
     });
 
   program

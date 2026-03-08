@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Command } from "commander";
+import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatLocateResults, type LocateResult } from "../format.js";
+import type { ResultSource } from "../format.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,6 +77,32 @@ export function registerLocateCommand(program: Command): void {
         }
       }
 
-      formatLocateResults(results, opts.format);
+      const graphResults = results.filter(r => r.source === "graph");
+      const textOnlyResults = results.filter(r => r.source === "ripgrep");
+
+      const resultSource: ResultSource =
+        graphResults.length > 0 && textOnlyResults.length > 0
+          ? "graph+text"
+          : graphResults.length > 0
+            ? "graph"
+            : "text";
+
+      if (opts.format === "json") {
+        console.log(JSON.stringify({ results, resultSource }, null, 2));
+      } else {
+        if (results.length === 0) {
+          console.log("No matches found.");
+        } else {
+          if (graphResults.length > 0) {
+            console.log(chalk.dim("Graph results:"));
+            formatLocateResults(graphResults, "text");
+          }
+          if (textOnlyResults.length > 0) {
+            if (graphResults.length > 0) console.log();
+            console.log(chalk.dim("Text results:"));
+            formatLocateResults(textOnlyResults, "text");
+          }
+        }
+      }
     });
 }
