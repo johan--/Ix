@@ -77,6 +77,7 @@ All commands accept `--format json` for machine-readable output.
 |---------|-------|-------------|
 | `ix status` | `ix status` | Check backend health |
 | `ix ingest` | `ix ingest <path> [--recursive]` | Ingest source files |
+| `ix ingest --github` | `ix ingest --github owner/repo` | Ingest GitHub issues, PRs, commits |
 | `ix search` | `ix search <term> [--limit N]` | Search nodes by term |
 | `ix explain` | `ix explain <symbol>` | Understand an entity |
 | `ix callers` | `ix callers <symbol>` | What calls a function |

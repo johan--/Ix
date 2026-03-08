@@ -56,6 +56,7 @@ Use bounded, composable CLI commands — never broad queries.
 | Goal | Command | Example |
 |---|---|---|
 | Ingest files | `ix ingest` | `ix ingest ./src --recursive` |
+| Ingest GitHub data | `ix ingest` | `ix ingest --github owner/repo --limit 50` |
 | Backend health | `ix status` | `ix status` |
 | Graph statistics | `ix stats` | `ix stats --format json` |
 

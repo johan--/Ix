@@ -77,6 +77,13 @@ ix imported-by <symbol> --format json
 ix depends <symbol> --format json
 ```
 
+### Ingesting data
+```
+ix ingest ./src --recursive --format json
+ix ingest --github owner/repo --format json --limit 50
+ix ingest --github owner/repo --since 2026-01-01 --format json
+```
+
 ### History and decisions
 ```
 ix decisions --format json
