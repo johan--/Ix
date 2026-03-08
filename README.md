@@ -45,6 +45,28 @@ What this does:
 Optional flags:
 
 ```bash
+# Production mode (Docker handles everything)
+./stack.sh
+
+# Or dev mode (ArangoDB in Docker, Memory Layer via sbt for hot reload)
+./dev.sh
+cd memory-layer && sbt run   # in another terminal
+```
+
+The backend is ready when you see:
+```
+Ix Memory backend is ready at http://localhost:8090
+```
+
+### 2. Install the CLI
+
+**Via Homebrew (recommended):**
+```bash
+brew tap ix-infrastructure/ix https://github.com/ix-infrastructure/IX-Memory
+brew install ix
+```
+
+**Or manually:**
 ./setup.sh --skip-backend
 ./setup.sh --skip-global-ix
 ```
@@ -75,6 +97,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ### Fast path
 
 ```bash
+cd ix-cli && npm install && npm run build
 ./scripts/connect.sh /path/to/your/project
 ```
 
@@ -83,6 +106,7 @@ This configures project files and ingests code.
 ### Manual path
 
 ```bash
+ix init
 cd /path/to/your/project
 node /path/to/IX-Memory/ix-cli/dist/cli/main.js init
 node /path/to/IX-Memory/ix-cli/dist/cli/main.js ingest ./src --recursive
