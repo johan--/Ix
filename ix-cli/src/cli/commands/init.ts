@@ -1,10 +1,11 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { getEndpoint, loadConfig, saveConfig, type WorkspaceConfig } from "../config.js";
 
 export const IX_MARKER_START = "<!-- IX-MEMORY START -->";
 export const IX_MARKER_END = "<!-- IX-MEMORY END -->";
@@ -78,6 +79,38 @@ export function registerInitCommand(program: Command): void {
         `endpoint: ${getEndpoint()}\nformat: text\n`
       );
       console.log("  [ok] Created ~/.ix/config.yaml");
+
+      // 2b. Register workspace
+      const rootPath = resolve(process.cwd());
+      const workspaceName = basename(rootPath);
+
+      const config = loadConfig();
+      const existingWorkspaces = config.workspaces ?? [];
+      const alreadyRegistered = existingWorkspaces.find(w => w.root_path === rootPath);
+
+      if (alreadyRegistered) {
+        console.log(`  [ok] Workspace already registered: ${alreadyRegistered.workspace_name} (${alreadyRegistered.workspace_id})`);
+      } else {
+        const hasDefault = existingWorkspaces.some(w => w.default);
+        const newWs: WorkspaceConfig = {
+          workspace_id: randomUUID().slice(0, 8),
+          workspace_name: workspaceName,
+          root_path: rootPath,
+          default: !hasDefault,
+        };
+
+        if (hasDefault) {
+          const defaultWs = existingWorkspaces.find(w => w.default)!;
+          console.log(`\n  A default workspace already exists:`);
+          console.log(`    ${defaultWs.workspace_name} at ${defaultWs.root_path}`);
+          console.log(`  New workspace: ${workspaceName} at ${rootPath}`);
+          console.log(`  (Set as non-default. Use 'ix init --set-default' to change.)\n`);
+        }
+
+        config.workspaces = [...existingWorkspaces, newWs];
+        saveConfig(config);
+        console.log(`  [ok] Registered workspace: ${workspaceName} (${newWs.workspace_id})`);
+      }
 
       // 3. Add IX block to CLAUDE.md (using markers for clean add/remove)
       if (existsSync("CLAUDE.md")) {
