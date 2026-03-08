@@ -1,10 +1,13 @@
 import chalk from "chalk";
 import type { IxClient } from "../client/api.js";
 
+export type ResolutionMode = "exact" | "preferred-kind" | "ambiguous" | "heuristic";
+
 export interface ResolvedEntity {
   id: string;
   kind: string;
   name: string;
+  resolutionMode: ResolutionMode;
 }
 
 /**
@@ -36,21 +39,21 @@ export async function resolveEntity(
   // If user specified --kind, take the first match
   if (kindFilter) {
     const node = candidates[0] as any;
-    return { id: node.id, kind: node.kind, name: node.name || node.attrs?.name || symbol };
+    return { id: node.id, kind: node.kind, name: node.name || node.attrs?.name || symbol, resolutionMode: "exact" };
   }
 
   // Try preferred kinds in order
   for (const pk of preferredKinds) {
     const match = candidates.find((n: any) => n.kind === pk);
     if (match) {
-      return { id: (match as any).id, kind: (match as any).kind, name: (match as any).name || (match as any).attrs?.name || symbol };
+      return { id: (match as any).id, kind: (match as any).kind, name: (match as any).name || (match as any).attrs?.name || symbol, resolutionMode: "preferred-kind" };
     }
   }
 
   // If only one candidate, use it
   if (candidates.length === 1) {
     const node = candidates[0] as any;
-    return { id: node.id, kind: node.kind, name: node.name || node.attrs?.name || symbol };
+    return { id: node.id, kind: node.kind, name: node.name || node.attrs?.name || symbol, resolutionMode: "exact" };
   }
 
   // Multiple candidates, no preferred kind match — show ambiguity
@@ -74,5 +77,8 @@ export async function resolveEntity(
  */
 export function printResolved(target: ResolvedEntity): void {
   const shortId = target.id.slice(0, 8);
-  console.log(`${chalk.dim("Resolved:")} ${chalk.cyan(target.kind)} ${chalk.dim(shortId)} ${chalk.bold(target.name)}\n`);
+  const modeStr = target.resolutionMode !== "exact"
+    ? chalk.dim(` (${target.resolutionMode})`)
+    : "";
+  console.log(`${chalk.dim("Resolved:")} ${chalk.cyan(target.kind)} ${chalk.dim(shortId)} ${chalk.bold(target.name)}${modeStr}\n`);
 }
