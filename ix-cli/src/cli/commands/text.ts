@@ -19,7 +19,6 @@ export function registerTextCommand(program: Command): void {
         const rgArgs = [
           "--json",
           "--max-count", String(limit),
-          "--no-heading",
         ];
 
         if (opts.language) {
