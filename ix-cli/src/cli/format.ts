@@ -1,5 +1,7 @@
 import chalk from "chalk";
 
+export type ResultSource = "graph" | "text" | "graph+text" | "heuristic";
+
 export function confidenceColor(score: number): (text: string) => string {
   if (score >= 0.8) return chalk.green;
   if (score >= 0.5) return chalk.yellow;
@@ -310,11 +312,15 @@ export function formatLocateResults(results: LocateResult[], format: string): vo
 
 export function formatEdgeResults(
   nodes: any[], relation: string, symbol: string, format: string,
-  resolvedTarget?: { id: string; kind: string; name: string }
+  resolvedTarget?: { id: string; kind: string; name: string; resolutionMode?: string },
+  source?: ResultSource
 ): void {
   if (format === "json") {
-    const output: any = { results: nodes };
-    if (resolvedTarget) output.resolvedTarget = resolvedTarget;
+    const output: any = { results: nodes, resultSource: source ?? "graph" };
+    if (resolvedTarget) {
+      output.resolvedTarget = resolvedTarget;
+      output.resolutionMode = resolvedTarget.resolutionMode ?? "exact";
+    }
     console.log(JSON.stringify(output, null, 2));
     return;
   }
@@ -323,6 +329,9 @@ export function formatEdgeResults(
     return;
   }
   console.log(`${chalk.bold(relation)} of ${chalk.cyan(symbol)}:`);
+  if (source && source !== "graph") {
+    console.log(chalk.dim(`Source: ${source}`));
+  }
   for (const n of nodes) {
     const shortId = n.id?.slice(0, 8) ?? "";
     const name = n.name || n.attrs?.name || n.id;
@@ -364,7 +373,7 @@ export interface ExplainResult {
 
 export function formatExplain(result: ExplainResult, format: string): void {
   if (format === "json") {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, resultSource: "graph" }, null, 2));
     return;
   }
   const shortId = result.id.slice(0, 8);

@@ -48,6 +48,7 @@ export function registerDependsCommand(program: Command): void {
 
       if (opts.format === "json") {
         console.log(JSON.stringify({
+          resultSource: "graph" as const,
           resolvedTarget: target,
           directDependents: allDependents.map((d: any) => ({
             id: d.id,

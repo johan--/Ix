@@ -16,6 +16,6 @@ export function registerContainsCommand(program: Command): void {
       if (!target) return;
       printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] });
-      formatEdgeResults(result.nodes, "contains", target.name, opts.format, target);
+      formatEdgeResults(result.nodes, "contains", target.name, opts.format, target, "graph");
     });
 }

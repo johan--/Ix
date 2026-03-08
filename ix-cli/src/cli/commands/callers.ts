@@ -21,7 +21,7 @@ export function registerCallersCommand(program: Command): void {
         predicates: ["CALLS"],
         kinds: ["function", "method"],
       });
-      formatEdgeResults(result.nodes, "callers", target.name, opts.format, target);
+      formatEdgeResults(result.nodes, "callers", target.name, opts.format, target, "graph");
     });
 
   program
@@ -40,6 +40,6 @@ export function registerCallersCommand(program: Command): void {
         predicates: ["CALLS"],
         kinds: ["function", "method"],
       });
-      formatEdgeResults(result.nodes, "callees", target.name, opts.format, target);
+      formatEdgeResults(result.nodes, "callees", target.name, opts.format, target, "graph");
     });
 }

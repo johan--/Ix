@@ -16,7 +16,7 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] });
-      formatEdgeResults(result.nodes, "imports", target.name, opts.format, target);
+      formatEdgeResults(result.nodes, "imports", target.name, opts.format, target, "graph");
     });
 
   program
@@ -30,6 +30,6 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       printResolved(target);
       const result = await client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] });
-      formatEdgeResults(result.nodes, "imported-by", target.name, opts.format, target);
+      formatEdgeResults(result.nodes, "imported-by", target.name, opts.format, target, "graph");
     });
 }
