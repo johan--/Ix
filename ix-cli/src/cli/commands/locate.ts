@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatLocateResults, type LocateResult } from "../format.js";
 
 const execFileAsync = promisify(execFile);
@@ -13,7 +13,8 @@ export function registerLocateCommand(program: Command): void {
     .description("Find a symbol in code and resolve to graph entities")
     .option("--limit <n>", "Max text hits to check", "10")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (symbol: string, opts: { limit: string; format: string }) => {
+    .option("--root <dir>", "Workspace root directory")
+    .action(async (symbol: string, opts: { limit: string; format: string; root?: string }) => {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
 
@@ -26,7 +27,7 @@ export function registerLocateCommand(program: Command): void {
         const { stdout } = await execFileAsync("rg", [
           "--json", "--max-count", String(limit),
           "--no-heading", "--word-regexp",
-          symbol, ".",
+          symbol, resolveWorkspaceRoot(opts.root),
         ], { maxBuffer: 10 * 1024 * 1024 });
 
         for (const line of stdout.split("\n")) {

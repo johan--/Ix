@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { resolveEntity } from "../resolve.js";
 
 export function registerReadCommand(program: Command): void {
@@ -11,10 +12,13 @@ export function registerReadCommand(program: Command): void {
     .description("Read source code — by file path, path:lines, or symbol name")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .option("--kind <kind>", "Filter symbol by kind")
-    .action(async (target: string, opts: { format: string; kind?: string }) => {
+    .option("--root <dir>", "Workspace root directory")
+    .action(async (target: string, opts: { format: string; kind?: string; root?: string }) => {
       // Check if target has a line range (path:start-end)
       const lineRangeMatch = target.match(/^(.+?):(\d+)-(\d+)$/);
-      const filePath = lineRangeMatch ? lineRangeMatch[1] : target;
+      const rawPath = lineRangeMatch ? lineRangeMatch[1] : target;
+      // Resolve relative paths against workspace root
+      const filePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(resolveWorkspaceRoot(opts.root), rawPath);
 
       // Try as a file path first
       if (fs.existsSync(filePath)) {

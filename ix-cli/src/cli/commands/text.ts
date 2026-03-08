@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Command } from "commander";
 import { formatTextResults, type TextResult } from "../format.js";
+import { resolveWorkspaceRoot } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,8 +14,10 @@ export function registerTextCommand(program: Command): void {
     .option("--path <dir>", "Restrict search to a directory", ".")
     .option("--language <lang>", "Filter by language (python, typescript, scala, etc.)")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (term: string, opts: { limit: string; path: string; format: string; language?: string }) => {
+    .option("--root <dir>", "Workspace root directory")
+    .action(async (term: string, opts: { limit: string; path: string; format: string; language?: string; root?: string }) => {
       const limit = parseInt(opts.limit, 10);
+      const searchPath = opts.path !== "." ? opts.path : resolveWorkspaceRoot(opts.root);
       try {
         const rgArgs = [
           "--json",
@@ -27,7 +30,7 @@ export function registerTextCommand(program: Command): void {
           }
         }
 
-        rgArgs.push(term, opts.path);
+        rgArgs.push(term, searchPath);
 
         const { stdout } = await execFileAsync("rg", rgArgs, { maxBuffer: 10 * 1024 * 1024 });
 

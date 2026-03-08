@@ -1,7 +1,8 @@
+import * as nodePath from "node:path";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
-import { getEndpoint } from "../config.js";
+import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 
 export function registerIngestCommand(program: Command): void {
   program
@@ -9,7 +10,10 @@ export function registerIngestCommand(program: Command): void {
     .description("Ingest source files into the knowledge graph")
     .option("--recursive", "Recursively ingest directory")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (path: string, opts: { recursive?: boolean; format: string }) => {
+    .option("--root <dir>", "Workspace root directory")
+    .action(async (path: string, opts: { recursive?: boolean; format: string; root?: string }) => {
+      // Resolve relative paths against workspace root
+      const resolvedPath = nodePath.isAbsolute(path) ? path : nodePath.resolve(resolveWorkspaceRoot(opts.root), path);
       const client = new IxClient(getEndpoint());
       const start = performance.now();
 
@@ -22,7 +26,7 @@ export function registerIngestCommand(program: Command): void {
       }, 200) : null;
 
       try {
-        const result = await client.ingest(path, opts.recursive);
+        const result = await client.ingest(resolvedPath, opts.recursive);
         if (interval) {
           clearInterval(interval);
           process.stderr.write("\r" + " ".repeat(40) + "\r");
