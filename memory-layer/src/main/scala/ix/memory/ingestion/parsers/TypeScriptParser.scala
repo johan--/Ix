@@ -1,6 +1,6 @@
 package ix.memory.ingestion.parsers
 
-import ix.memory.ingestion.{Parser, ParseResult, ParsedEntity, ParsedRelationship}
+import ix.memory.ingestion.{Fingerprint, Parser, ParseResult, ParsedEntity, ParsedRelationship}
 import ix.memory.model.NodeKind
 import io.circe.Json
 
@@ -50,12 +50,15 @@ class TypeScriptParser extends Parser {
         ClassPattern.findFirstMatchIn(line).foreach { m =>
           val className = m.group(1)
           val classEnd = findBraceBlockEnd(lines, idx)
+          val bodyText = lines.slice(idx, classEnd).mkString("\n")
+          val fp = Fingerprint.compute(trimmed.replaceAll("""\s*\{\s*$""", "").take(120), bodyText)
           entities = entities :+ ParsedEntity(
             name      = className,
             kind      = NodeKind.Class,
             attrs     = Map("language" -> Json.fromString("typescript")),
             lineStart = lineNum,
-            lineEnd   = classEnd
+            lineEnd   = classEnd,
+            contentFingerprint = Some(fp)
           )
           relationships = relationships :+ ParsedRelationship(fileName, className, "CONTAINS")
           classRanges = classRanges :+ (className, lineNum, classEnd)
@@ -72,6 +75,8 @@ class TypeScriptParser extends Parser {
             val funcName = m.group(1)
             val funcEnd = findBraceBlockEnd(lines, idx)
             val summary = line.trim.take(120)
+            val bodyText = lines.slice(idx, funcEnd).mkString("\n")
+            val fp = Fingerprint.compute(summary, bodyText)
             entities = entities :+ ParsedEntity(
               name      = funcName,
               kind      = NodeKind.Function,
@@ -82,7 +87,8 @@ class TypeScriptParser extends Parser {
                 "visibility" -> Json.fromString("public")
               ),
               lineStart = lineNum,
-              lineEnd   = funcEnd
+              lineEnd   = funcEnd,
+              contentFingerprint = Some(fp)
             )
             relationships = relationships :+ ParsedRelationship(fileName, funcName, "CONTAINS")
 
@@ -101,6 +107,8 @@ class TypeScriptParser extends Parser {
             if (!entities.exists(e => e.name == funcName && e.kind == NodeKind.Function)) {
               val funcEnd = findBraceBlockEnd(lines, idx)
               val summary = line.trim.take(120)
+              val bodyText = lines.slice(idx, funcEnd).mkString("\n")
+              val fp = Fingerprint.compute(summary, bodyText)
               entities = entities :+ ParsedEntity(
                 name      = funcName,
                 kind      = NodeKind.Function,
@@ -111,7 +119,8 @@ class TypeScriptParser extends Parser {
                   "visibility" -> Json.fromString("public")
                 ),
                 lineStart = lineNum,
-                lineEnd   = funcEnd
+                lineEnd   = funcEnd,
+                contentFingerprint = Some(fp)
               )
               relationships = relationships :+ ParsedRelationship(fileName, funcName, "CONTAINS")
 
@@ -157,6 +166,8 @@ class TypeScriptParser extends Parser {
           val ifaceName = m.group(1)
           if (!entities.exists(e => e.name == ifaceName && e.kind == NodeKind.Interface)) {
             val ifaceEnd = findBraceBlockEnd(lines, idx)
+            val bodyText = lines.slice(idx, ifaceEnd).mkString("\n")
+            val fp = Fingerprint.compute(trimmed.replaceAll("""\s*\{\s*$""", "").take(120), bodyText)
             entities = entities :+ ParsedEntity(
               name      = ifaceName,
               kind      = NodeKind.Interface,
@@ -165,7 +176,8 @@ class TypeScriptParser extends Parser {
                 "ts_kind"   -> Json.fromString("interface")
               ),
               lineStart = lineNum,
-              lineEnd   = ifaceEnd
+              lineEnd   = ifaceEnd,
+              contentFingerprint = Some(fp)
             )
             relationships = relationships :+ ParsedRelationship(fileName, ifaceName, "CONTAINS")
           }
@@ -175,6 +187,7 @@ class TypeScriptParser extends Parser {
         TypeAliasPattern.findFirstMatchIn(line).foreach { m =>
           val typeName = m.group(1)
           if (!trimmed.startsWith("import")) {
+            val fp = Fingerprint.compute(trimmed.take(120), trimmed)
             entities = entities :+ ParsedEntity(
               name      = typeName,
               kind      = NodeKind.Class,
@@ -183,7 +196,8 @@ class TypeScriptParser extends Parser {
                 "ts_kind"  -> Json.fromString("type_alias")
               ),
               lineStart = lineNum,
-              lineEnd   = lineNum
+              lineEnd   = lineNum,
+              contentFingerprint = Some(fp)
             )
             relationships = relationships :+ ParsedRelationship(fileName, typeName, "CONTAINS")
           }
@@ -248,6 +262,8 @@ class TypeScriptParser extends Parser {
             val methodEnd = findBraceBlockEnd(lines, i)
             val summary = line.trim.take(120)
             val visibility = extractVisibility(line.trim)
+            val bodyText = lines.slice(i, methodEnd).mkString("\n")
+            val fp = Fingerprint.compute(summary, bodyText)
             entities = entities :+ ParsedEntity(
               name      = methodName,
               kind      = NodeKind.Method,
@@ -258,7 +274,8 @@ class TypeScriptParser extends Parser {
                 "visibility" -> Json.fromString(visibility)
               ),
               lineStart = lineNum,
-              lineEnd   = methodEnd
+              lineEnd   = methodEnd,
+              contentFingerprint = Some(fp)
             )
             relationships = relationships :+ ParsedRelationship(className, methodName, "CONTAINS")
 

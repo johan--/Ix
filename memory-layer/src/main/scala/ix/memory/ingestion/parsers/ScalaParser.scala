@@ -1,6 +1,6 @@
 package ix.memory.ingestion.parsers
 
-import ix.memory.ingestion.{Parser, ParseResult, ParsedEntity, ParsedRelationship}
+import ix.memory.ingestion.{Fingerprint, Parser, ParseResult, ParsedEntity, ParsedRelationship}
 import ix.memory.model.NodeKind
 import io.circe.Json
 
@@ -71,13 +71,16 @@ class ScalaParser extends Parser {
           case Some(m) =>
             val name = m.group(1)
             val endLine = findBraceBlockEnd(lines, idx).getOrElse(lineNum)
+            val bodyText = lines.slice(idx, endLine).mkString("\n")
+            val fp = Fingerprint.compute(extractTypeSignature(trimmed), bodyText)
             entities = entities :+ ParsedEntity(
               name      = name,
               kind      = NodeKind.Class,
               attrs     = Map("scala_kind" -> Json.fromString("case_class"), "language" -> Json.fromString("scala"),
                 "signature" -> Json.fromString(extractTypeSignature(trimmed)), "visibility" -> Json.fromString(extractVisibility(trimmed))),
               lineStart = lineNum,
-              lineEnd   = endLine
+              lineEnd   = endLine,
+              contentFingerprint = Some(fp)
             )
             relationships = relationships :+ ParsedRelationship(fileName, name, "CONTAINS")
             typeRanges = typeRanges :+ (name, lineNum, endLine)
@@ -89,13 +92,16 @@ class ScalaParser extends Parser {
               case Some(m) =>
                 val name = m.group(1)
                 val endLine = findBraceBlockEnd(lines, idx).getOrElse(lineNum)
+                val bodyText = lines.slice(idx, endLine).mkString("\n")
+                val fp = Fingerprint.compute(extractTypeSignature(trimmed), bodyText)
                 entities = entities :+ ParsedEntity(
                   name      = name,
                   kind      = NodeKind.Trait,
                   attrs     = Map("scala_kind" -> Json.fromString("trait"), "language" -> Json.fromString("scala"),
                     "signature" -> Json.fromString(extractTypeSignature(trimmed)), "visibility" -> Json.fromString(extractVisibility(trimmed))),
                   lineStart = lineNum,
-                  lineEnd   = endLine
+                  lineEnd   = endLine,
+                  contentFingerprint = Some(fp)
                 )
                 relationships = relationships :+ ParsedRelationship(fileName, name, "CONTAINS")
                 typeRanges = typeRanges :+ (name, lineNum, endLine)
@@ -107,13 +113,16 @@ class ScalaParser extends Parser {
                   case Some(m) =>
                     val name = m.group(1)
                     val endLine = findBraceBlockEnd(lines, idx).getOrElse(lineNum)
+                    val bodyText = lines.slice(idx, endLine).mkString("\n")
+                    val fp = Fingerprint.compute(extractTypeSignature(trimmed), bodyText)
                     entities = entities :+ ParsedEntity(
                       name      = name,
                       kind      = NodeKind.Object,
                       attrs     = Map("scala_kind" -> Json.fromString("object"), "language" -> Json.fromString("scala"),
                         "signature" -> Json.fromString(extractTypeSignature(trimmed)), "visibility" -> Json.fromString(extractVisibility(trimmed))),
                       lineStart = lineNum,
-                      lineEnd   = endLine
+                      lineEnd   = endLine,
+                      contentFingerprint = Some(fp)
                     )
                     relationships = relationships :+ ParsedRelationship(fileName, name, "CONTAINS")
                     typeRanges = typeRanges :+ (name, lineNum, endLine)
@@ -125,13 +134,16 @@ class ScalaParser extends Parser {
                       case Some(m) =>
                         val name = m.group(1)
                         val endLine = findBraceBlockEnd(lines, idx).getOrElse(lineNum)
+                        val bodyText = lines.slice(idx, endLine).mkString("\n")
+                        val fp = Fingerprint.compute(extractTypeSignature(trimmed), bodyText)
                         entities = entities :+ ParsedEntity(
                           name      = name,
                           kind      = NodeKind.Class,
                           attrs     = Map("scala_kind" -> Json.fromString("class"), "language" -> Json.fromString("scala"),
                             "signature" -> Json.fromString(extractTypeSignature(trimmed)), "visibility" -> Json.fromString(extractVisibility(trimmed))),
                           lineStart = lineNum,
-                          lineEnd   = endLine
+                          lineEnd   = endLine,
+                          contentFingerprint = Some(fp)
                         )
                         relationships = relationships :+ ParsedRelationship(fileName, name, "CONTAINS")
                         typeRanges = typeRanges :+ (name, lineNum, endLine)
@@ -161,6 +173,9 @@ class ScalaParser extends Parser {
               case None                   => (NodeKind.Function, "CONTAINS", fileName)
             }
 
+            val bodyText = lines.slice(idx, endLine).mkString("\n")
+            val fp = Fingerprint.compute(signature, bodyText)
+
             entities = entities :+ ParsedEntity(
               name      = funcName,
               kind      = kind,
@@ -171,7 +186,8 @@ class ScalaParser extends Parser {
                 "visibility" -> Json.fromString(visibility)
               ),
               lineStart = lineNum,
-              lineEnd   = endLine
+              lineEnd   = endLine,
+              contentFingerprint = Some(fp)
             )
 
             relationships = relationships :+ ParsedRelationship(edgeSrc, funcName, edgePredicate)

@@ -1,6 +1,6 @@
 package ix.memory.ingestion.parsers
 
-import ix.memory.ingestion.{Parser, ParseResult, ParsedEntity, ParsedRelationship}
+import ix.memory.ingestion.{Fingerprint, Parser, ParseResult, ParsedEntity, ParsedRelationship}
 import ix.memory.model.NodeKind
 import io.circe.Json
 
@@ -96,12 +96,15 @@ class TreeSitterPythonParser extends Parser {
       ClassPattern.findFirstMatchIn(line).foreach { m =>
         val className = m.group(1)
         val classEnd = findBlockEnd(lines, idx)
+        val bodyText = lines.slice(idx, classEnd).mkString("\n")
+        val fp = Fingerprint.compute(line.trim.take(120), bodyText)
         entities = entities :+ ParsedEntity(
           name      = className,
           kind      = NodeKind.Class,
           attrs     = Map("language" -> Json.fromString("python")),
           lineStart = lineNum,
-          lineEnd   = classEnd
+          lineEnd   = classEnd,
+          contentFingerprint = Some(fp)
         )
         // File CONTAINS class
         relationships = relationships :+ ParsedRelationship(fileName, className, "CONTAINS")
@@ -111,13 +114,17 @@ class TreeSitterPythonParser extends Parser {
       // Check for function/method definition
       FuncPattern.findFirstMatchIn(line).foreach { m =>
         val funcName = m.group(2)
+        val funcEnd = findBlockEnd(lines, idx)
+        val bodyText = lines.slice(idx, funcEnd).mkString("\n")
+        val fp = Fingerprint.compute(line.trim.take(120), bodyText)
 
         entities = entities :+ ParsedEntity(
           name      = funcName,
           kind      = NodeKind.Function,
           attrs     = Map("language" -> Json.fromString("python")),
           lineStart = lineNum,
-          lineEnd   = findBlockEnd(lines, idx)
+          lineEnd   = funcEnd,
+          contentFingerprint = Some(fp)
         )
 
         // Check if this function's line falls within any class range
