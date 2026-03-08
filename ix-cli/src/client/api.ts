@@ -19,7 +19,17 @@ export class IxClient {
   }
 
   async ingest(path: string, recursive?: boolean): Promise<IngestResult> {
-    return this.post("/v1/ingest", { path, recursive });
+    const resp = await fetch(`${this.endpoint}/v1/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, recursive }),
+      signal: AbortSignal.timeout(30 * 60 * 1000), // 30 minute timeout for large repos
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<IngestResult>;
   }
 
   async decide(

@@ -12,32 +12,50 @@ export function registerIngestCommand(program: Command): void {
     .action(async (path: string, opts: { recursive?: boolean; format: string }) => {
       const client = new IxClient(getEndpoint());
       const start = performance.now();
-      const result = await client.ingest(path, opts.recursive);
-      const elapsed = ((performance.now() - start) / 1000).toFixed(2);
-      if (opts.format === "json") {
-        console.log(JSON.stringify({ ...result, elapsedSeconds: parseFloat(elapsed) }, null, 2));
-      } else {
-        console.log(chalk.bold("\nIngest summary"));
-        console.log(`  processed:   ${result.patchesApplied} files (${elapsed}s)`);
-        console.log(`  discovered:  ${result.filesProcessed} files`);
-        if (result.skipReasons) {
-          const sr = result.skipReasons;
-          if (sr.unchanged > 0) console.log(`  ${chalk.dim("skipped unchanged:")} ${sr.unchanged}`);
-          if (sr.emptyFile > 0) console.log(`  ${chalk.dim("skipped empty:")}     ${sr.emptyFile}`);
-          if (sr.parseError > 0) console.log(`  ${chalk.red("parse errors:")}      ${sr.parseError}`);
-          if (sr.tooLarge > 0) console.log(`  ${chalk.dim("skipped too large:")} ${sr.tooLarge}`);
-        } else if (result.filesSkipped) {
-          console.log(`  ${chalk.dim("skipped:")}  ${result.filesSkipped} unchanged files`);
-        }
-        console.log(`  rev:         ${result.latestRev}`);
 
-        if (result.patchesApplied === 0 && result.filesProcessed === 0) {
-          console.log(chalk.yellow("\n  ⚠ No files ingested. The path may be outside the project root,"));
-          console.log(chalk.yellow("    contain no supported file types, or not exist."));
-        } else if (result.patchesApplied === 0 && result.filesProcessed > 0) {
-          console.log(chalk.dim("\n  All files unchanged since last ingest."));
+      // Show elapsed time while waiting
+      const spinner = ["\u28CB", "\u28D9", "\u28F9", "\u28F8", "\u28FC", "\u28F4", "\u28E6", "\u28E7", "\u28C7", "\u28CF"];
+      let spinIdx = 0;
+      const interval = opts.format === "text" ? setInterval(() => {
+        const elapsed = ((performance.now() - start) / 1000).toFixed(0);
+        process.stderr.write(`\r${spinner[spinIdx++ % spinner.length]} Ingesting... ${elapsed}s`);
+      }, 200) : null;
+
+      try {
+        const result = await client.ingest(path, opts.recursive);
+        if (interval) {
+          clearInterval(interval);
+          process.stderr.write("\r" + " ".repeat(40) + "\r");
         }
-        console.log();
+        const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+
+        if (opts.format === "json") {
+          console.log(JSON.stringify({ ...result, elapsedSeconds: parseFloat(elapsed) }, null, 2));
+        } else {
+          console.log(chalk.bold("\nIngest summary"));
+          console.log(`  processed:   ${result.patchesApplied} files (${elapsed}s)`);
+          console.log(`  discovered:  ${result.filesProcessed} files`);
+          if (result.skipReasons) {
+            const sr = result.skipReasons;
+            if (sr.unchanged > 0) console.log(`  ${chalk.dim("skipped unchanged:")} ${sr.unchanged}`);
+            if (sr.emptyFile > 0) console.log(`  ${chalk.dim("skipped empty:")}     ${sr.emptyFile}`);
+            if (sr.parseError > 0) console.log(`  ${chalk.red("parse errors:")}      ${sr.parseError}`);
+            if (sr.tooLarge > 0) console.log(`  ${chalk.dim("skipped too large:")} ${sr.tooLarge}`);
+          } else if (result.filesSkipped) {
+            console.log(`  ${chalk.dim("skipped:")}  ${result.filesSkipped} unchanged files`);
+          }
+          console.log(`  rev:         ${result.latestRev}`);
+
+          if (result.patchesApplied === 0 && result.filesProcessed === 0) {
+            console.log(chalk.yellow("\n  Warning: No files ingested. The path may be outside the project root,"));
+            console.log(chalk.yellow("    contain no supported file types, or not exist."));
+          } else if (result.patchesApplied === 0 && result.filesProcessed > 0) {
+            console.log(chalk.dim("\n  All files unchanged since last ingest."));
+          }
+          console.log();
+        }
+      } finally {
+        if (interval) clearInterval(interval);
       }
     });
 }
