@@ -28,8 +28,6 @@ MCP is still present for compatibility, but the primary interface is `ix` CLI co
 
 ## Install And Start
 
-### Recommended (one command)
-
 From repo root:
 
 ```bash
@@ -45,28 +43,6 @@ What this does:
 Optional flags:
 
 ```bash
-# Production mode (Docker handles everything)
-./stack.sh
-
-# Or dev mode (ArangoDB in Docker, Memory Layer via sbt for hot reload)
-./dev.sh
-cd memory-layer && sbt run   # in another terminal
-```
-
-The backend is ready when you see:
-```
-Ix Memory backend is ready at http://localhost:8090
-```
-
-### 2. Install the CLI
-
-**Via Homebrew (recommended):**
-```bash
-brew tap ix-infrastructure/ix https://github.com/ix-infrastructure/IX-Memory
-brew install ix
-```
-
-**Or manually:**
 ./setup.sh --skip-backend
 ./setup.sh --skip-global-ix
 ```
@@ -75,14 +51,6 @@ brew install ix
 
 ```bash
 ./scripts/backend.sh check
-ix status
-```
-
-## Running The CLI
-
-`setup.sh` installs `ix` globally for your user at `~/.local/bin/ix`.
-
-```bash
 ix status
 ```
 
@@ -97,19 +65,15 @@ export PATH="$HOME/.local/bin:$PATH"
 ### Fast path
 
 ```bash
-cd ix-cli && npm install && npm run build
 ./scripts/connect.sh /path/to/your/project
 ```
-
-This configures project files and ingests code.
 
 ### Manual path
 
 ```bash
-ix init
 cd /path/to/your/project
-node /path/to/IX-Memory/ix-cli/dist/cli/main.js init
-node /path/to/IX-Memory/ix-cli/dist/cli/main.js ingest ./src --recursive
+ix init
+ix ingest ./src --recursive
 ```
 
 ## Core Usage
@@ -137,7 +101,7 @@ ix text "commitPatch" --language ts --limit 20 --format json
 ix ingest --github owner/repo --since 2026-01-01 --limit 50 --format json
 ```
 
-Auth resolution order in code:
+Auth resolution order:
 1. `--token <pat>`
 2. `GITHUB_TOKEN`
 3. `gh auth token`
@@ -172,23 +136,16 @@ Backend:
 sbt memoryLayer/test
 ```
 
-## Known Gaps / Notes
+## Known Notes
 
 - Many Scala tests require a live ArangoDB instance; if it is down, DB/API/E2E specs fail.
 - `TreeSitterPythonParser` still contains a TODO for full AST traversal fallback behavior.
-- `ix query` remains available but is explicitly deprecated in help text and templates.
-- `connect.sh` still sets MCP config for IDE compatibility; CLI is still the canonical interface.
-
-## Next Steps (Recommended)
-
-1. Stabilize backend tests by making DB-dependent specs self-start ArangoDB (or isolate with test profile).
-2. Resolve `ConflictDetectorSpec` expectation drift (`"Contradictory"` vs `"Potential inconsistency"`).
-3. Add a CI pipeline that runs `npm test` and `sbt memoryLayer/test` with Arango service container.
-4. Add parser diagnostics reporting in CLI output when fallback/unresolved references are returned.
+- `ix query` remains available but is deprecated in help text and templates.
+- `connect.sh` still sets MCP config for IDE compatibility; CLI remains canonical.
 
 ## Architecture
 
-```
+```text
 ix-cli  --->  memory-layer (http4s)  --->  ArangoDB
    \
     \--> mcp server (compatibility mode)
