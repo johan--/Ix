@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { Command } from "commander";
 import { formatTextResults, type TextResult } from "../format.js";
 import { resolveWorkspaceRoot } from "../config.js";
+import { stderr } from "../stderr.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +63,7 @@ export function registerTextCommand(program: Command): void {
         formatTextResults(results.slice(0, limit), opts.format);
       } catch (err: any) {
         if (err.code === "ENOENT") {
-          console.error("Error: ripgrep (rg) is not installed. Install it: https://github.com/BurntSushi/ripgrep#installation");
+          stderr("Error: ripgrep (rg) is not installed. Install it: https://github.com/BurntSushi/ripgrep#installation");
           process.exit(1);
         }
         if (err.code === 1 || err.status === 1) {

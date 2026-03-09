@@ -5,6 +5,7 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { resolveEntity } from "../resolve.js";
+import { stderr } from "../stderr.js";
 
 export function registerReadCommand(program: Command): void {
   program
@@ -53,7 +54,7 @@ export function registerReadCommand(program: Command): void {
         "function", "method", "class", "trait", "object", "interface", "module", "file"
       ], opts);
       if (!resolved) {
-        console.error(`Could not resolve symbol: ${target}`);
+        stderr(`Could not resolve symbol: ${target}`);
         return;
       }
 
@@ -70,7 +71,7 @@ export function registerReadCommand(program: Command): void {
           }
           return;
         }
-        console.error(`Source file not found: ${sourceUri ?? "(no provenance)"}`);
+        stderr(`Source file not found: ${sourceUri ?? "(no provenance)"}`);
         return;
       }
 
