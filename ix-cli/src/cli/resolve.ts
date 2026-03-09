@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { IxClient } from "../client/api.js";
+import { stderr } from "./stderr.js";
 
 export type ResolutionMode = "exact" | "preferred-kind" | "ambiguous" | "heuristic";
 
@@ -24,7 +25,7 @@ export async function resolveEntity(
   const nodes = await client.search(symbol, { limit: 20, kind: kindFilter });
 
   if (nodes.length === 0) {
-    console.log(`No entity found matching "${symbol}".`);
+    stderr(`No entity found matching "${symbol}".`);
     return null;
   }
 
@@ -57,7 +58,7 @@ export async function resolveEntity(
   }
 
   // Multiple candidates, no preferred kind match — show ambiguity
-  console.log(`Multiple matches for "${symbol}":`);
+  stderr(`Multiple matches for "${symbol}":`);
   const seen = new Set<string>();
   for (const n of candidates.slice(0, 5)) {
     const node = n as any;
@@ -66,9 +67,9 @@ export async function resolveEntity(
     seen.add(key);
     const shortId = node.id.slice(0, 8);
     const name = node.name || node.attrs?.name || "(unnamed)";
-    console.log(`  ${chalk.cyan((node.kind ?? "").padEnd(10))} ${chalk.dim(shortId)}  ${name}`);
+    stderr(`  ${chalk.cyan((node.kind ?? "").padEnd(10))} ${chalk.dim(shortId)}  ${name}`);
   }
-  console.log(chalk.dim(`\nUse --kind <kind> to disambiguate.`));
+  stderr(chalk.dim(`\nUse --kind <kind> to disambiguate.`));
   return null;
 }
 
@@ -81,7 +82,7 @@ export function printResolved(target: ResolvedEntity): void {
   const modeStr = target.resolutionMode !== "exact"
     ? chalk.dim(` (${target.resolutionMode})`)
     : "";
-  console.log(`${chalk.dim("Resolved:")} ${chalk.cyan(target.kind)} ${chalk.dim(shortId)} ${chalk.bold(target.name)}${modeStr}\n`);
+  stderr(`${chalk.dim("Resolved:")} ${chalk.cyan(target.kind)} ${chalk.dim(shortId)} ${chalk.bold(target.name)}${modeStr}\n`);
 }
 
 /** Check if a string looks like a raw UUID (not a human-readable name). */
