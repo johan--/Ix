@@ -27,6 +27,7 @@ import { registerInventoryCommand } from "./commands/inventory.js";
 import { registerImpactCommand } from "./commands/impact.js";
 import { registerRankCommand } from "./commands/rank.js";
 import { registerOverviewCommand } from "./commands/overview.js";
+import { registerGoalCommand } from "./commands/goal.js";
 
 const program = new Command();
 program
@@ -61,5 +62,6 @@ registerInventoryCommand(program);
 registerImpactCommand(program);
 registerRankCommand(program);
 registerOverviewCommand(program);
+registerGoalCommand(program);
 
 program.parse();
