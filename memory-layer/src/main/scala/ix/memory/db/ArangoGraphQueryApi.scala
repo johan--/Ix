@@ -305,6 +305,42 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
     } yield results.flatten
   }
 
+  override def getDiffSummary(fromRev: Rev, toRev: Rev): IO[Map[String, Int]] = {
+    val aql = """
+      FOR n IN nodes
+        FILTER n.created_rev > @fromRev AND n.created_rev <= @toRev
+        COLLECT logicalId = n.logical_id
+        LET atFrom = FIRST(
+          FOR x IN nodes
+            FILTER x.logical_id == logicalId
+              AND x.created_rev <= @fromRev
+              AND (x.deleted_rev == null OR @fromRev < x.deleted_rev)
+            RETURN x
+        )
+        LET atTo = FIRST(
+          FOR x IN nodes
+            FILTER x.logical_id == logicalId
+              AND x.created_rev <= @toRev
+              AND (x.deleted_rev == null OR @toRev < x.deleted_rev)
+            RETURN x
+        )
+        LET changeType = (atFrom == null ? "added" : (atTo == null ? "removed" : "modified"))
+        COLLECT type = changeType WITH COUNT INTO cnt
+        RETURN { type: type, cnt: cnt }
+    """
+    client.query(aql, Map(
+      "fromRev" -> Long.box(fromRev.value).asInstanceOf[AnyRef],
+      "toRev"   -> Long.box(toRev.value).asInstanceOf[AnyRef]
+    )).map { results =>
+      results.flatMap { json =>
+        for {
+          t <- json.hcursor.downField("type").as[String].toOption
+          c <- json.hcursor.downField("cnt").as[Int].toOption
+        } yield t -> c
+      }.toMap
+    }
+  }
+
   override def resolvePrefix(prefix: String): IO[Vector[NodeId]] =
     client.query(
       """FOR n IN nodes
