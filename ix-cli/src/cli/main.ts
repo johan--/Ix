@@ -29,6 +29,9 @@ import { registerRankCommand } from "./commands/rank.js";
 import { registerOverviewCommand } from "./commands/overview.js";
 import { registerGoalCommand } from "./commands/goal.js";
 import { registerPlanCommand, registerTaskCommand } from "./commands/plan.js";
+import { registerBugCommand } from "./commands/bug.js";
+import { registerBugsCommand } from "./commands/bugs.js";
+import { registerPlansCommand } from "./commands/plans.js";
 import { registerWatchCommand } from "./commands/watch.js";
 
 const program = new Command();
@@ -67,6 +70,9 @@ registerOverviewCommand(program);
 registerGoalCommand(program);
 registerPlanCommand(program);
 registerTaskCommand(program);
+registerBugCommand(program);
+registerBugsCommand(program);
+registerPlansCommand(program);
 registerWatchCommand(program);
 
 program.parse();

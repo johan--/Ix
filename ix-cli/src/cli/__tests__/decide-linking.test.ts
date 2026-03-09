@@ -40,4 +40,9 @@ describe("buildDecisionPatch", () => {
     expect(patch.ops[1].src).toBe("parent-decision-id"); // parent → child
     expect(patch.ops[1].dst).toBe(patch.ops[0].id);
   });
+
+  it("uses sourceType decision", () => {
+    const patch = buildDecisionPatch("Test", "Reason");
+    expect(patch.source.sourceType).toBe("decision");
+  });
 });

@@ -26,7 +26,7 @@ function makePatchEnvelope(ops: PatchOp[], intent?: string): GraphPatchPayload {
   };
 }
 
-export function buildPlanPatch(title: string, goalId: string): GraphPatchPayload {
+export function buildPlanPatch(title: string, goalId: string, respondsTo?: string): GraphPatchPayload {
   const planId = deterministicId(`plan:${title}:${goalId}`);
   const edgeId = deterministicId(`${goalId}:GOAL_HAS_PLAN:${planId}`);
   const ops: PatchOp[] = [
@@ -46,6 +46,18 @@ export function buildPlanPatch(title: string, goalId: string): GraphPatchPayload
       attrs: {},
     },
   ];
+
+  if (respondsTo) {
+    ops.push({
+      type: "UpsertEdge",
+      id: deterministicId(`${planId}:RESPONDS_TO:${respondsTo}`),
+      src: planId,
+      dst: respondsTo,
+      predicate: "RESPONDS_TO",
+      attrs: {},
+    });
+  }
+
   return makePatchEnvelope(ops, `Create plan: ${title}`);
 }
 
@@ -139,10 +151,11 @@ export function registerPlanCommand(program: Command): void {
     .command("create <title>")
     .description("Create a new plan linked to a goal")
     .requiredOption("--goal <id>", "Goal ID to link the plan to")
+    .option("--responds-to <bugId>", "Bug ID this plan responds to (creates RESPONDS_TO edge)")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (title: string, opts: { goal: string; format: string }) => {
+    .action(async (title: string, opts: { goal: string; respondsTo?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const patch = buildPlanPatch(title, opts.goal);
+      const patch = buildPlanPatch(title, opts.goal, opts.respondsTo);
       const result = await client.commitPatch(patch);
       const planId = patch.ops[0].id as string;
       if (opts.format === "json") {

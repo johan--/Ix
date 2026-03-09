@@ -31,6 +31,7 @@ interface OverviewResult {
   diagnostics: string[];
   decisions: { id: string; title: string; rationale?: string }[];
   tasks: { id: string; title: string; status: string }[];
+  bugs: { id: string; title: string; status: string; severity: string }[];
 }
 
 export function registerOverviewCommand(program: Command): void {
@@ -73,13 +74,14 @@ async function overviewContainer(
   const diagnostics: string[] = [];
 
   // Fetch entity details, members, imports, and inbound dependents in parallel
-  const [details, membersResult, importsResult, inboundResult, decisionsResult, tasksResult] = await Promise.all([
+  const [details, membersResult, importsResult, inboundResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
     client.entity(target.id),
     client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] }),
     client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["CALLS", "IMPORTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
   ]);
 
   const node = details.node as any;
@@ -99,6 +101,13 @@ async function overviewContainer(
     id: n.id,
     title: n.name || n.attrs?.name || "(unnamed)",
     status: String(n.attrs?.status ?? "pending"),
+  }));
+
+  const bugs = bugsResult.nodes.map((n: any) => ({
+    id: n.id,
+    title: n.name || n.attrs?.name || "(unnamed)",
+    status: String(n.attrs?.status ?? "open"),
+    severity: String(n.attrs?.severity ?? "medium"),
   }));
 
   // Get top 5 members by name and their inbound CALLS count
@@ -153,6 +162,7 @@ async function overviewContainer(
     diagnostics,
     decisions,
     tasks,
+    bugs,
   };
 
   if (format === "json") {
@@ -187,6 +197,14 @@ async function overviewContainer(
         console.log(`  ${icon} [${t.status}] ${t.title}`);
       }
     }
+
+    if (bugs.length > 0) {
+      console.log(`\nBugs:`);
+      for (const b of bugs) {
+        const icon = b.status === "closed" || b.status === "resolved" ? "✓" : "○";
+        console.log(`  ${icon} [${b.status}] ${chalk.red(b.severity)} ${b.title}`);
+      }
+    }
   }
 }
 
@@ -198,12 +216,13 @@ async function overviewCallable(
   const diagnostics: string[] = [];
 
   // Fetch entity details, callers, and callees in parallel
-  const [details, callersResult, calleesResult, decisionsResult, tasksResult] = await Promise.all([
+  const [details, callersResult, calleesResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
     client.entity(target.id),
     client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
     client.expand(target.id, { direction: "out", predicates: ["CALLS"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
   ]);
 
   const node = details.node as any;
@@ -245,6 +264,13 @@ async function overviewCallable(
     status: String(n.attrs?.status ?? "pending"),
   }));
 
+  const bugs = bugsResult.nodes.map((n: any) => ({
+    id: n.id,
+    title: n.name || n.attrs?.name || "(unnamed)",
+    status: String(n.attrs?.status ?? "open"),
+    severity: String(n.attrs?.severity ?? "medium"),
+  }));
+
   const result: OverviewResult = {
     resolvedTarget: { id: target.id, kind: target.kind, name: target.name },
     resolutionMode: target.resolutionMode,
@@ -260,6 +286,7 @@ async function overviewCallable(
     diagnostics,
     decisions,
     tasks,
+    bugs,
   };
 
   if (format === "json") {
@@ -284,6 +311,14 @@ async function overviewCallable(
       for (const t of tasks) {
         const icon = t.status === "done" ? "✓" : "○";
         console.log(`  ${icon} [${t.status}] ${t.title}`);
+      }
+    }
+
+    if (bugs.length > 0) {
+      console.log(`\nBugs:`);
+      for (const b of bugs) {
+        const icon = b.status === "closed" || b.status === "resolved" ? "✓" : "○";
+        console.log(`  ${icon} [${b.status}] ${chalk.red(b.severity)} ${b.title}`);
       }
     }
   }

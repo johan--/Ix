@@ -54,26 +54,28 @@ async function containerImpact(
 ): Promise<void> {
   const diagnostics: string[] = [];
 
-  // 1. Get contained members
-  const containsResult = await client.expand(target.id, {
-    direction: "out",
-    predicates: ["CONTAINS"],
-  });
+  // 1. Get contained members, importers, dependents, and developer-cycle context in parallel
+  const [containsResult, importersResult, dependentsResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
+    client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
+  ]);
   const members = containsResult.nodes;
-
-  // 2. Get direct importers
-  const importersResult = await client.expand(target.id, {
-    direction: "in",
-    predicates: ["IMPORTS"],
-  });
   const directImporters = importersResult.nodes;
-
-  // 3. Get direct dependents (callers of the container itself)
-  const dependentsResult = await client.expand(target.id, {
-    direction: "in",
-    predicates: ["CALLS"],
-  });
   const directDependents = dependentsResult.nodes;
+
+  const decisions = decisionsResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)",
+  }));
+  const tasks = tasksResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)", status: String(n.attrs?.status ?? "pending"),
+  }));
+  const bugs = bugsResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)", status: String(n.attrs?.status ?? "open"), severity: String(n.attrs?.severity ?? "medium"),
+  }));
 
   // 4. For each member (up to 20), get inbound callers
   const membersToCheck = members.slice(0, 20);
@@ -127,6 +129,9 @@ async function containerImpact(
             memberLevelCallers: totalMemberCallers,
           },
           topImpactedMembers: topMembers,
+          decisions: decisions.length > 0 ? decisions : undefined,
+          tasks: tasks.length > 0 ? tasks : undefined,
+          bugs: bugs.length > 0 ? bugs : undefined,
           diagnostics,
         },
         null,
@@ -152,6 +157,29 @@ async function containerImpact(
       console.log(chalk.dim("\nNo member-level callers found."));
     }
 
+    if (decisions.length > 0) {
+      console.log(chalk.bold("\nDecisions:"));
+      for (const d of decisions) {
+        console.log(`  ${chalk.yellow(d.name)}`);
+      }
+    }
+
+    if (tasks.length > 0) {
+      console.log(chalk.bold("\nTasks:"));
+      for (const t of tasks) {
+        const icon = t.status === "done" ? "✓" : "○";
+        console.log(`  ${icon} [${t.status}] ${t.name}`);
+      }
+    }
+
+    if (bugs.length > 0) {
+      console.log(chalk.bold("\nBugs:"));
+      for (const b of bugs) {
+        const icon = b.status === "closed" || b.status === "resolved" ? "✓" : "○";
+        console.log(`  ${icon} [${b.status}] ${chalk.red(b.severity)} ${b.name}`);
+      }
+    }
+
     if (diagnostics.length > 0) {
       console.log(chalk.dim(`\nDiagnostics: ${diagnostics.join("; ")}`));
     }
@@ -163,17 +191,24 @@ async function leafImpact(
   target: { id: string; kind: string; name: string; resolutionMode: string },
   isJson: boolean
 ): Promise<void> {
-  // 1. Get direct callers
-  const callersResult = await client.expand(target.id, {
-    direction: "in",
-    predicates: ["CALLS"],
-  });
+  // Fetch callers, callees, and developer-cycle context in parallel
+  const [callersResult, calleesResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
+    client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "out", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
+  ]);
 
-  // 2. Get direct callees
-  const calleesResult = await client.expand(target.id, {
-    direction: "out",
-    predicates: ["CALLS"],
-  });
+  const decisions = decisionsResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)",
+  }));
+  const tasks = tasksResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)", status: String(n.attrs?.status ?? "pending"),
+  }));
+  const bugs = bugsResult.nodes.map((n: any) => ({
+    id: n.id, name: n.name || n.attrs?.name || "(unnamed)", status: String(n.attrs?.status ?? "open"), severity: String(n.attrs?.severity ?? "medium"),
+  }));
 
   if (isJson) {
     console.log(
@@ -196,6 +231,9 @@ async function leafImpact(
             kind: n.kind,
             name: n.name || n.attrs?.name || "(unnamed)",
           })),
+          decisions: decisions.length > 0 ? decisions : undefined,
+          tasks: tasks.length > 0 ? tasks : undefined,
+          bugs: bugs.length > 0 ? bugs : undefined,
           diagnostics: [],
         },
         null,
@@ -225,6 +263,29 @@ async function leafImpact(
         const kindStr = chalk.cyan((node.kind || "").padEnd(10));
         const name = node.name || node.attrs?.name || "(unnamed)";
         console.log(`  ${kindStr} ${name}`);
+      }
+    }
+
+    if (decisions.length > 0) {
+      console.log(chalk.bold("\nDecisions:"));
+      for (const d of decisions) {
+        console.log(`  ${chalk.yellow(d.name)}`);
+      }
+    }
+
+    if (tasks.length > 0) {
+      console.log(chalk.bold("\nTasks:"));
+      for (const t of tasks) {
+        const icon = t.status === "done" ? "✓" : "○";
+        console.log(`  ${icon} [${t.status}] ${t.name}`);
+      }
+    }
+
+    if (bugs.length > 0) {
+      console.log(chalk.bold("\nBugs:"));
+      for (const b of bugs) {
+        const icon = b.status === "closed" || b.status === "resolved" ? "✓" : "○";
+        console.log(`  ${icon} [${b.status}] ${chalk.red(b.severity)} ${b.name}`);
       }
     }
   }
