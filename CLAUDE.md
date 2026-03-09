@@ -34,6 +34,8 @@ Start here. These aggregate multiple graph operations into single bounded respon
 | Plan work | `ix plan` | `ix plan next <plan-id> --format json` |
 | Track decisions | `ix decide` | `ix decide "Use X" --rationale "..." --affects Entity` |
 | Create goals | `ix goal` | `ix goal create "Support GitHub" --format json` |
+| Session resume | `ix briefing` | `ix briefing --format json` |
+| Track bugs | `ix bug` | `ix bug create "title" --affects Entity` |
 
 ### Low-Level Primitives
 
@@ -69,6 +71,9 @@ Underlying structural commands — useful for debugging or fine-grained inspecti
 | Record a decision | `ix decide` | `ix decide "Use CONTAINS" --rationale "Normalize edges"` |
 | Record a goal | `ix truth add` | `ix truth add "Support 100k file repos"` |
 | List goals | `ix truth list` | `ix truth list --format json` |
+| Bug tracking | `ix bug create` | `ix bug create "title" --severity high --affects Entity` |
+| Bug listing | `ix bugs` | `ix bugs --format json` |
+| Bug details | `ix bug show` | `ix bug show <id> --format json` |
 
 ### Ingestion & Health
 | Goal | Command | Example |
@@ -116,6 +121,14 @@ ix inventory --kind function --format json
 - Use `--path` or `--language` to restrict text searches
 - Use exact entity IDs from previous JSON results
 - Decompose large questions into multiple targeted calls
+
+## Semantic Boundaries
+
+Use the right entity type for the right purpose:
+
+- **decision** — a choice between alternatives, with rationale. Use `ix decide`.
+- **bug** — something broken, missing, or incorrect. Use `ix bug create`.
+- **task/plan** — intended work and sequencing. Use `ix plan` / `ix plan task`.
 
 ## Do NOT Use
 - `ix query` — deprecated, produces oversized low-signal responses

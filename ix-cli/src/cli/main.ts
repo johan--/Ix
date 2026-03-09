@@ -33,6 +33,7 @@ import { registerBugCommand } from "./commands/bug.js";
 import { registerBugsCommand } from "./commands/bugs.js";
 import { registerPlansCommand } from "./commands/plans.js";
 import { registerWatchCommand } from "./commands/watch.js";
+import { registerBriefingCommand } from "./commands/briefing.js";
 
 const program = new Command();
 program
@@ -74,5 +75,6 @@ registerBugCommand(program);
 registerBugsCommand(program);
 registerPlansCommand(program);
 registerWatchCommand(program);
+registerBriefingCommand(program);
 
 program.parse();

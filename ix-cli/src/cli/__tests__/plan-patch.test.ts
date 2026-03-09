@@ -65,6 +65,21 @@ describe("buildTaskPatch", () => {
     expect(patch.ops[2].predicate).toBe("TASK_AFFECTS");
   });
 
+  it("stores workflow array in attrs when provided", () => {
+    const patch = buildTaskPatch("Investigate auth", {
+      planId: "plan-123",
+      workflow: ["ix overview AuthService", "ix explain verifyToken"],
+    });
+    const attrs = patch.ops[0].attrs as Record<string, unknown>;
+    expect(attrs.workflow).toEqual(["ix overview AuthService", "ix explain verifyToken"]);
+  });
+
+  it("omits workflow from attrs when not provided", () => {
+    const patch = buildTaskPatch("Simple task", { planId: "plan-123" });
+    const attrs = patch.ops[0].attrs as Record<string, unknown>;
+    expect(attrs).not.toHaveProperty("workflow");
+  });
+
   it("uses sourceType cli", () => {
     const patch = buildTaskPatch("Task", { planId: "plan-123" });
     expect(patch.source.sourceType).toBe("cli");

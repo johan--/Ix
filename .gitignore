@@ -5,6 +5,6 @@ target/
 *.jar
 .DS_Store
 .worktrees/
-ix-cli/node_modules/
+ix-cli/node_modules/*
 ix-cli/dist/
 .vscode/

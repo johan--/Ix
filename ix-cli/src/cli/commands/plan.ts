@@ -65,6 +65,7 @@ export interface TaskOpts {
   planId: string;
   dependsOn?: string;
   affects?: { id: string; kind: string; name: string }[];
+  workflow?: string[];
 }
 
 export function buildTaskPatch(title: string, opts: TaskOpts): GraphPatchPayload {
@@ -76,7 +77,11 @@ export function buildTaskPatch(title: string, opts: TaskOpts): GraphPatchPayload
       id: taskId,
       kind: "task",
       name: title,
-      attrs: { status: "pending", created_at: new Date().toISOString() },
+      attrs: {
+        status: "pending",
+        created_at: new Date().toISOString(),
+        ...(opts.workflow ? { workflow: opts.workflow } : {}),
+      },
     },
     {
       type: "UpsertEdge",
@@ -171,8 +176,9 @@ export function registerPlanCommand(program: Command): void {
     .requiredOption("--plan <id>", "Plan ID")
     .option("--depends-on <id>", "Task ID this task depends on")
     .option("--affects <entities>", "Comma-separated entity names this task affects")
+    .option("--workflow <commands>", "Comma-separated ix commands to run for this task")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (title: string, opts: { plan: string; dependsOn?: string; affects?: string; format: string }) => {
+    .action(async (title: string, opts: { plan: string; dependsOn?: string; affects?: string; workflow?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
 
       let affectsEntities: { id: string; kind: string; name: string }[] | undefined;
@@ -190,10 +196,15 @@ export function registerPlanCommand(program: Command): void {
         }
       }
 
+      const workflowArr = opts.workflow
+        ? opts.workflow.split(",").map(s => s.trim())
+        : undefined;
+
       const patch = buildTaskPatch(title, {
         planId: opts.plan,
         dependsOn: opts.dependsOn,
         affects: affectsEntities,
+        workflow: workflowArr,
       });
       const result = await client.commitPatch(patch);
       const taskId = patch.ops[0].id as string;
@@ -295,8 +306,9 @@ export function registerPlanCommand(program: Command): void {
   plan
     .command("next <planId>")
     .description("Show the next actionable task in a plan")
+    .option("--with-workflow", "Include workflow commands in output")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (planId: string, opts: { format: string }) => {
+    .action(async (planId: string, opts: { withWorkflow?: boolean; format: string }) => {
       const client = new IxClient(getEndpoint());
 
       const { nodes: taskNodes } = await client.expand(planId, {
@@ -328,17 +340,33 @@ export function registerPlanCommand(program: Command): void {
 
       if (opts.format === "json") {
         if (nextActionable) {
-          console.log(JSON.stringify({
+          const result: Record<string, unknown> = {
             task: nextActionable.title,
             taskId: nextActionable.id,
             reason: "all dependencies satisfied",
-          }, null, 2));
+          };
+          if (opts.withWorkflow) {
+            const detail = await client.entity(nextActionable.id);
+            const workflow = (detail.node?.attrs?.workflow as string[] | undefined) ?? [];
+            result.workflow = workflow;
+          }
+          console.log(JSON.stringify(result, null, 2));
         } else {
           console.log(JSON.stringify({ task: null, reason: "no actionable tasks" }, null, 2));
         }
       } else {
         if (nextActionable) {
           console.log(`${chalk.green("Next:")} ${nextActionable.title} (${nextActionable.id.slice(0, 8)})`);
+          if (opts.withWorkflow) {
+            const detail = await client.entity(nextActionable.id);
+            const workflow = (detail.node?.attrs?.workflow as string[] | undefined) ?? [];
+            if (workflow.length > 0) {
+              console.log(chalk.dim("Workflow:"));
+              for (const cmd of workflow) {
+                console.log(`  ${chalk.cyan("▸")} ${cmd}`);
+              }
+            }
+          }
         } else {
           console.log(chalk.dim("No actionable tasks."));
         }
@@ -350,6 +378,49 @@ export function registerTaskCommand(program: Command): void {
   const task = program
     .command("task")
     .description("Manage tasks");
+
+  task
+    .command("show <taskId>")
+    .description("Show task details")
+    .option("--with-workflow", "Include workflow commands in output")
+    .option("--format <fmt>", "Output format (text|json)", "text")
+    .action(async (taskId: string, opts: { withWorkflow?: boolean; format: string }) => {
+      const client = new IxClient(getEndpoint());
+      const details = await client.entity(taskId);
+      const node = details.node as any;
+
+      const statusClaim = details.claims?.find(
+        (c: any) => c.field === "status" || c.statement?.includes("status")
+      );
+      const status = statusClaim
+        ? ((statusClaim as any).value ?? (statusClaim as any).statement ?? "pending")
+        : (node.attrs?.status ?? "pending");
+
+      const workflow = (node.attrs?.workflow as string[] | undefined) ?? [];
+
+      if (opts.format === "json") {
+        const result: Record<string, unknown> = {
+          taskId,
+          title: node.name,
+          status,
+          created_at: node.attrs?.created_at ?? node.createdAt,
+        };
+        if (opts.withWorkflow) {
+          result.workflow = workflow;
+        }
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const icon = STATUS_ICONS[status] ?? "?";
+        console.log(`${icon} ${chalk.bold(node.name)}`);
+        console.log(`  Status: ${status}`);
+        if (opts.withWorkflow && workflow.length > 0) {
+          console.log(chalk.dim("  Workflow:"));
+          for (const cmd of workflow) {
+            console.log(`    ${chalk.cyan("▸")} ${cmd}`);
+          }
+        }
+      }
+    });
 
   task
     .command("update <taskId>")

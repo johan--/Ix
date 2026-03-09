@@ -65,6 +65,10 @@ ix goal create <statement> --format json      # Create a project goal
 ix plan create <title> --goal <id> --format json  # Create a plan
 ix plan next <plan-id> --format json          # Next actionable task
 ix decide <title> --rationale <text> --affects <entities> --format json  # Record linked decision
+ix briefing --format json                     # Session-scoped resume summary
+ix bug create "title" --affects Entity        # Track a bug
+ix bugs --format json                         # List bugs
+ix bug show <id> --format json                # Bug details
 ```
 
 **When to use which:**
@@ -128,11 +132,20 @@ ix goal create "GitHub ingestion pipeline" --format json
 ix goal list --format json
 ix plan create "GitHub Ingestion" --goal <goal-id> --format json
 ix plan task "API fetch layer" --plan <plan-id> --depends-on <task-id> --format json
+ix plan task "title" --plan <id> --workflow "cmd1,cmd2" --format json  # Task with workflow
 ix plan status <plan-id> --format json
 ix plan next <plan-id> --format json
+ix plan next <plan-id> --with-workflow --format json  # Next task with workflow commands
+ix task show <task-id> --with-workflow --format json   # Task details with workflow
 ix task update <task-id> --status done --format json
 ix decide "Use client-side patch" --rationale "..." --affects IngestionService --format json
 ```
+
+## Semantic boundaries
+
+- **decision** — a choice between alternatives, with rationale. Use `ix decide`.
+- **bug** — something broken, missing, or incorrect. Use `ix bug create`.
+- **task/plan** — intended work and sequencing. Use `ix plan` / `ix plan task`.
 
 ## Chaining pattern
 
