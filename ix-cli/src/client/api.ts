@@ -139,9 +139,15 @@ export class IxClient {
   async diff(
     fromRev: number,
     toRev: number,
-    entityId?: string
+    opts?: { entityId?: string; summary?: boolean; limit?: number }
   ): Promise<unknown> {
-    return this.post("/v1/diff", { fromRev, toRev, entityId });
+    return this.post("/v1/diff", {
+      fromRev,
+      toRev,
+      entityId: opts?.entityId,
+      summary: opts?.summary,
+      limit: opts?.limit,
+    });
   }
 
   async conflicts(): Promise<unknown[]> {
