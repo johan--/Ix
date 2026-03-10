@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { formatExplain, type ExplainResult, type EntityRef, type Diagnostic } from "../format.js";
-import { resolveEntity, isRawId } from "../resolve.js";
+import { resolveFileOrEntity, isRawId } from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { stderr } from "../stderr.js";
 import chalk from "chalk";
@@ -13,11 +13,13 @@ export function registerExplainCommand(program: Command): void {
     .description("Explain an entity — shows structure, container, and history")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", "\nExamples:\n  ix explain IngestionService\n  ix explain expand --path memory-layer\n  ix explain verify_token --kind function --format json")
-    .action(async (symbol: string, opts: { kind?: string; path?: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const target = await resolveEntity(client, symbol, ["class", "function", "method", "trait", "object", "interface", "module", "file"], opts);
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
 
       const details = await client.entity(target.id);

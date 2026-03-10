@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
-import { resolveEntity, printResolved } from "../resolve.js";
+import { resolveFileOrEntity, printResolved } from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { stderr } from "../stderr.js";
 
@@ -47,13 +47,15 @@ export function registerLocateCommand(program: Command): void {
     .option("--limit <n>", "Max text hits to check", "10")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer results from files matching this path substring")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .option("--root <dir>", "Workspace root directory")
     .addHelpText("after", `\nExamples:
   ix locate IngestionService
   ix locate verify_token --kind function
-  ix locate ArangoClient --format json`)
-    .action(async (symbol: string, opts: { limit: string; kind?: string; path?: string; format: string; root?: string }) => {
+  ix locate ArangoClient --format json
+  ix locate scoreCandidate --pick 2`)
+    .action(async (symbol: string, opts: { limit: string; kind?: string; path?: string; pick?: string; format: string; root?: string }) => {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
       const root = resolveWorkspaceRoot(opts.root);
@@ -61,8 +63,8 @@ export function registerLocateCommand(program: Command): void {
 
       // --- Step 1: Resolve the target entity ---
       // Prefer structural container kinds — locate wants real definitions, not incidental helpers
-      const allKinds = ["class", "object", "trait", "interface", "module", "file", "function", "method"];
-      const target = await resolveEntity(client, symbol, allKinds, opts);
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
 
       if (!target) {
         // Fall back to text-only search

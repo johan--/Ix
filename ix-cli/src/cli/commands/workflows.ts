@@ -9,6 +9,25 @@ Recommended Development Loop:
   4. ix rank --by callers --kind method   Find hotspots
   5. ix plan next <id> --with-workflow    Get next task with commands
 
+Staged Workflows:
+  A workflow is a staged sequence of Ix commands attached to a task/plan/decision.
+  It is NOT a goal, plan, task, or bug — those are developer-cycle objects that may HAVE workflows.
+
+  Stages: discover → implement → validate
+
+  Attach a workflow from a file:
+    ix workflow attach task <id> --file /path/to/workflow.json
+    ix workflow attach plan <id> --file /path/to/workflow.json
+
+  Or inline when creating a task:
+    ix plan task "Step 1" --plan <id> --workflow-staged '{"discover":["ix overview X"]}'
+
+  ix workflow show task <id>              Show workflow on a task
+  ix workflow show plan <id>              Show workflow on a plan
+  ix workflow validate task <id>          Validate workflow structure
+  ix workflow run task <id>               Run all workflow stages
+  ix workflow run task <id> --stage discover   Run one stage
+
 Bug Workflow:
   ix bugs --status open                   See open bugs
   ix bug show <id>                        Get bug details
@@ -35,9 +54,20 @@ export function registerWorkflowsHelpCommand(program: Command): void {
         return;
       }
 
-      if (topic === "workflows") {
+      if (topic === "workflows" || topic === "workflow") {
         console.log(WORKFLOWS_TEXT);
         return;
+      }
+
+      // "goals" → forward to "goal" command help
+      if (topic === "goals") {
+        const goalCmd = program.commands.find(
+          (c: Command) => c.name() === "goal"
+        );
+        if (goalCmd) {
+          goalCmd.outputHelp();
+          return;
+        }
       }
 
       // Look up the topic as a registered command and show its help

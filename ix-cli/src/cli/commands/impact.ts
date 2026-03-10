@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveEntity, printResolved } from "../resolve.js";
+import { resolveFileOrEntity, printResolved } from "../resolve.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "object", "trait", "interface"]);
 
@@ -11,6 +11,7 @@ export function registerImpactCommand(program: Command): void {
     .command("impact <target>")
     .description("Aggregated impact analysis — who depends on this symbol and its members")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--depth <n>", "Expansion depth (reserved for future use)", "1")
     .option("--limit <n>", "Max top-impacted members to show", "10")
     .option("--format <fmt>", "Output format (text|json)", "text")
@@ -21,18 +22,14 @@ export function registerImpactCommand(program: Command): void {
     .action(
       async (
         symbol: string,
-        opts: { kind?: string; depth: string; limit: string; format: string }
+        opts: { kind?: string; pick?: string; depth: string; limit: string; format: string }
       ) => {
         const client = new IxClient(getEndpoint());
         const limit = parseInt(opts.limit, 10);
         const isJson = opts.format === "json";
 
-        const target = await resolveEntity(
-          client,
-          symbol,
-          ["class", "module", "file", "object", "trait", "interface", "method", "function"],
-          opts
-        );
+        const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+        const target = await resolveFileOrEntity(client, symbol, resolveOpts);
         if (!target) return;
 
         if (!isJson) printResolved(target);

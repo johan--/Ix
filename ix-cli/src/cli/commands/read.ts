@@ -39,7 +39,8 @@ interface ReadResult {
 
 interface AmbiguityResult {
   targetType: "ambiguous-file" | "ambiguous-symbol";
-  candidates: Array<{ name: string; kind?: string; path?: string; id?: string }>;
+  candidates: Array<{ name: string; kind?: string; path?: string; id?: string; rank?: number }>;
+  diagnostics?: Array<{ code: string; message: string }>;
 }
 
 async function checkStale(client: IxClient, filePath: string): Promise<boolean> {
@@ -76,16 +77,17 @@ function outputAmbiguity(result: AmbiguityResult, target: string, format: string
   } else {
     const label = result.targetType === "ambiguous-file" ? "file" : "symbol";
     stderr(`Ambiguous ${label} "${target}":`);
-    for (const c of result.candidates) {
+    for (let i = 0; i < result.candidates.length; i++) {
+      const c = result.candidates[i];
       const kindStr = c.kind ? chalk.cyan(c.kind.padEnd(10)) : "";
       const pathStr = c.path ? chalk.dim(` ${c.path}`) : "";
       const idStr = c.id ? chalk.dim(` ${c.id.slice(0, 8)}`) : "";
-      stderr(`  ${kindStr}${idStr}  ${c.name}${pathStr}`);
+      stderr(`  ${i + 1}. ${kindStr}${idStr}  ${c.name}${pathStr}`);
     }
     if (result.targetType === "ambiguous-file") {
       stderr(chalk.dim("\nProvide a more specific path to disambiguate."));
     } else {
-      stderr(chalk.dim("\nUse --kind or --path to disambiguate."));
+      stderr(chalk.dim("\nUse --pick <n>, --kind, or --path to disambiguate."));
     }
   }
 }
@@ -97,6 +99,7 @@ export function registerReadCommand(program: Command): void {
     .option("--format <fmt>", "Output format (text|json)", "text")
     .option("--kind <kind>", "Filter symbol by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--root <dir>", "Workspace root directory")
     .addHelpText("after", `\nResolution order:
   1. Exact file path          ix read src/main.ts
@@ -112,7 +115,7 @@ Examples:
   ix read IngestionService
   ix read ingestFile --kind method
   ix read verify_token --path auth`)
-    .action(async (target: string, opts: { format: string; kind?: string; path?: string; root?: string }) => {
+    .action(async (target: string, opts: { format: string; kind?: string; path?: string; pick?: string; root?: string }) => {
       const root = resolveWorkspaceRoot(opts.root);
       const client = new IxClient(getEndpoint());
 
@@ -164,7 +167,8 @@ Examples:
         if (filenameMatches.length > 1) {
           outputAmbiguity({
             targetType: "ambiguous-file",
-            candidates: filenameMatches.map(m => ({ name: m.name, path: m.path })),
+            candidates: filenameMatches.map((m, i) => ({ name: m.name, path: m.path, rank: i + 1 })),
+            diagnostics: [{ code: "ambiguous_resolution", message: "Provide a more specific path to disambiguate." }],
           }, target, opts.format);
           return;
         }
@@ -172,7 +176,7 @@ Examples:
       }
 
       // --- Step 4: Try unique symbol match ---
-      const symbolResult = await trySymbolMatch(client, rawTarget, opts);
+      const symbolResult = await trySymbolMatch(client, rawTarget, { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined });
       if (symbolResult.type === "resolved") {
         const { node, sourceUri } = symbolResult;
         const stale = sourceUri ? await checkStale(client, sourceUri) : false;
@@ -224,7 +228,8 @@ Examples:
       if (symbolResult.type === "ambiguous") {
         outputAmbiguity({
           targetType: "ambiguous-symbol",
-          candidates: symbolResult.candidates,
+          candidates: symbolResult.candidates.map((c, i) => ({ ...c, rank: i + 1 })),
+          diagnostics: [{ code: "ambiguous_resolution", message: "Use --pick <n> or --path to disambiguate." }],
         }, target, opts.format);
         return;
       }
@@ -314,7 +319,7 @@ type SymbolResult =
 async function trySymbolMatch(
   client: IxClient,
   symbol: string,
-  opts: { kind?: string; path?: string }
+  opts: { kind?: string; path?: string; pick?: number }
 ): Promise<SymbolResult> {
   const preferredKinds = ["file", "class", "object", "trait", "interface", "module", "function", "method"];
   const full = await resolveEntityFull(client, symbol, preferredKinds, opts);

@@ -1,11 +1,15 @@
 import type { Command } from "commander";
 import type { GraphPatchPayload, PatchOp } from "../../client/types.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { deterministicId } from "../github/transform.js";
 import { resolveEntity, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import chalk from "chalk";
+
+const execFileAsync = promisify(execFile);
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -15,7 +19,7 @@ export interface StagedWorkflow {
   validate?: string[];
 }
 
-const VALID_WORKFLOW_STAGES = ["discover", "implement", "validate"];
+export const VALID_WORKFLOW_STAGES = ["discover", "implement", "validate"];
 
 export function isValidWorkflow(w: unknown): w is string[] | StagedWorkflow {
   if (Array.isArray(w)) return w.every(s => typeof s === "string");
@@ -26,9 +30,63 @@ export function isValidWorkflow(w: unknown): w is string[] | StagedWorkflow {
 }
 
 /** Normalize any workflow form to StagedWorkflow for display */
-function normalizeWorkflow(w: string[] | StagedWorkflow): StagedWorkflow {
+export function normalizeWorkflow(w: string[] | StagedWorkflow): StagedWorkflow {
   if (Array.isArray(w)) return { discover: w };
   return w;
+}
+
+/** Run workflow stages — constrained to ix commands only. */
+interface WorkflowRunResult {
+  stage: string;
+  command: string;
+  status: "ok" | "error" | "skipped";
+  output?: unknown;
+  error?: string;
+}
+
+async function executeIxCommand(cmd: string): Promise<unknown> {
+  const trimmed = cmd.replace(/^ix\s+/, "");
+  const args = trimmed.split(/\s+/);
+  if (!args.includes("--format") && !args.includes("-f")) {
+    args.push("--format", "json");
+  }
+  const { stdout } = await execFileAsync("ix", args, {
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 60_000,
+  });
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return stdout.trim();
+  }
+}
+
+async function runWorkflowStages(
+  workflow: StagedWorkflow,
+  stages: string[],
+): Promise<WorkflowRunResult[]> {
+  const results: WorkflowRunResult[] = [];
+  for (const stage of stages) {
+    const cmds = workflow[stage as keyof StagedWorkflow];
+    if (!cmds || cmds.length === 0) continue;
+    for (const cmd of cmds) {
+      if (!cmd.trimStart().startsWith("ix ") && cmd.trim() !== "ix") {
+        results.push({ stage, command: cmd, status: "skipped", error: "Only ix commands are allowed" });
+        continue;
+      }
+      if (/[|;&`$()]/.test(cmd)) {
+        results.push({ stage, command: cmd, status: "skipped", error: "Shell operators not allowed" });
+        continue;
+      }
+      try {
+        const output = await executeIxCommand(cmd);
+        results.push({ stage, command: cmd, status: "ok", output });
+      } catch (err: any) {
+        results.push({ stage, command: cmd, status: "error", error: err.message || String(err) });
+      }
+    }
+  }
+  return results;
 }
 
 // ── Patch builders (exported for testing) ──────────────────────────
@@ -192,25 +250,60 @@ export function registerPlanCommand(program: Command): void {
       `\nSubcommands:
   create <title>   Create a new plan linked to a goal
   task <title>     Add a task to a plan
-  status <planId>  Show plan status with all tasks
+  status <planId>  Show plan status with all tasks (alias: show)
   next <planId>    Show the next actionable task
 
+Options --goal and --plan accept IDs, UUID prefixes, or exact names.
+Duplicate names within each type are rejected.
+
 Examples:
-  ix plan create "Fix auth" --goal <goal-id>
-  ix plan task "Step 1" --plan <plan-id>
-  ix plan status <plan-id> --format json
+  ix plan create "Fix auth" --goal <goal-id-or-name>
+  ix plan task "Step 1" --plan <plan-id-or-name>
+  ix plan create "Fix auth" --goal "Support GitHub"
+  ix plan task "Step 1" --plan "Fix auth"
+  ix plan show <plan-id> --format json
   ix plan next <plan-id> --with-workflow`
     );
 
   plan
     .command("create <title>")
     .description("Create a new plan linked to a goal")
-    .requiredOption("--goal <id>", "Goal ID to link the plan to")
+    .requiredOption("--goal <id-or-name>", "Goal ID or name to link the plan to")
     .option("--responds-to <bugId>", "Bug ID this plan responds to (creates RESPONDS_TO edge)")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (title: string, opts: { goal: string; respondsTo?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const patch = buildPlanPatch(title, opts.goal, opts.respondsTo);
+
+      // Resolve goal reference (accepts name or ID)
+      let goalId: string;
+      try {
+        goalId = await client.resolvePrefix(opts.goal);
+      } catch {
+        const intents = await client.listTruth();
+        const match = intents.find(
+          (i: any) => (i.name || i.statement || "").toLowerCase() === opts.goal.toLowerCase(),
+        );
+        if (match) {
+          goalId = (match as any).id;
+        } else {
+          stderr(`No goal found matching "${opts.goal}".`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      // Check duplicate plan name
+      const existingPlans = await client.search(title, { limit: 5, kind: "plan", nameOnly: true });
+      const dupPlan = (existingPlans as any[]).find(
+        (n: any) => (n.name || "").toLowerCase() === title.toLowerCase(),
+      );
+      if (dupPlan) {
+        stderr(`A plan named "${title}" already exists (${dupPlan.id.slice(0, 8)}). Use a unique name.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const patch = buildPlanPatch(title, goalId, opts.respondsTo);
       const result = await client.commitPatch(patch);
       const planId = patch.ops[0].id as string;
       if (opts.format === "json") {
@@ -223,7 +316,7 @@ Examples:
   plan
     .command("task <title>")
     .description("Add a task to a plan")
-    .requiredOption("--plan <id>", "Plan ID")
+    .requiredOption("--plan <id-or-name>", "Plan ID or name")
     .option("--depends-on <id>", "Task ID this task depends on")
     .option("--affects <entities>", "Comma-separated entity names this task affects")
     .option("--workflow <commands>", "Comma-separated ix commands to run for this task")
@@ -232,6 +325,33 @@ Examples:
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (title: string, opts: { plan: string; dependsOn?: string; affects?: string; workflow?: string; workflowStaged?: string; resolves?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
+
+      // Resolve plan reference (accepts name or ID)
+      let planId: string;
+      try {
+        planId = await client.resolvePrefix(opts.plan);
+      } catch {
+        const target = await resolveEntity(client, opts.plan, ["plan"], {});
+        if (!target) {
+          process.exitCode = 1;
+          return;
+        }
+        planId = target.id;
+      }
+
+      // Check duplicate task name within this plan
+      const { nodes: existingTasks } = await client.expand(planId, {
+        direction: "out",
+        predicates: ["PLAN_HAS_TASK"],
+      });
+      const dupTask = existingTasks.find(
+        (n: any) => n.kind === "task" && (n.name || "").toLowerCase() === title.toLowerCase(),
+      );
+      if (dupTask) {
+        stderr(`A task named "${title}" already exists in this plan (${dupTask.id.slice(0, 8)}). Use a unique name.`);
+        process.exitCode = 1;
+        return;
+      }
 
       let affectsEntities: { id: string; kind: string; name: string }[] | undefined;
       if (opts.affects) {
@@ -268,7 +388,7 @@ Examples:
       }
 
       const patch = buildTaskPatch(title, {
-        planId: opts.plan,
+        planId,
         dependsOn: opts.dependsOn,
         affects: affectsEntities,
         workflow,
@@ -285,13 +405,24 @@ Examples:
 
   plan
     .command("status <planId>")
+    .alias("show")
     .description("Show plan status with all tasks")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (planId: string, opts: { format: string }) => {
       const client = new IxClient(getEndpoint());
 
+      // Resolve plan ID (accept name or UUID prefix)
+      let resolvedPlanId = planId;
+      try {
+        resolvedPlanId = await client.resolvePrefix(planId);
+      } catch {
+        const target = await resolveEntity(client, planId, ["plan"], {});
+        if (!target) return;
+        resolvedPlanId = target.id;
+      }
+
       // Expand PLAN_HAS_TASK to get all tasks
-      const { nodes: taskNodes, edges: taskEdges } = await client.expand(planId, {
+      const { nodes: taskNodes, edges: taskEdges } = await client.expand(resolvedPlanId, {
         direction: "out",
         predicates: ["PLAN_HAS_TASK"],
       });
@@ -344,7 +475,7 @@ Examples:
         .map(([id]) => id);
 
       // Count open bugs linked via RESPONDS_TO
-      const { nodes: respondNodes } = await client.expand(planId, {
+      const { nodes: respondNodes } = await client.expand(resolvedPlanId, {
         direction: "out",
         predicates: ["RESPONDS_TO"],
       });
@@ -361,7 +492,7 @@ Examples:
 
       if (opts.format === "json") {
         console.log(JSON.stringify({
-          planId,
+          planId: resolvedPlanId,
           tasks: tasks.map(t => ({ title: t.title, status: t.status, id: t.id })),
           criticalPath,
           nextActionable: nextActionable ? nextActionable.id : null,
@@ -383,11 +514,24 @@ Examples:
     .command("next <planId>")
     .description("Show the next actionable task in a plan")
     .option("--with-workflow", "Include workflow commands in output")
+    .option("--run-workflow", "Resolve next task and run its workflow")
+    .option("--stage <stage>", "When used with --run-workflow, run only this stage")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (planId: string, opts: { withWorkflow?: boolean; format: string }) => {
+    .action(async (planId: string, opts: { withWorkflow?: boolean; runWorkflow?: boolean; stage?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
 
-      const { nodes: taskNodes } = await client.expand(planId, {
+      // Resolve plan ID (accept name or UUID prefix)
+      let resolvedPlanId = planId;
+      try {
+        resolvedPlanId = await client.resolvePrefix(planId);
+      } catch {
+        // Try searching by name
+        const target = await resolveEntity(client, planId, ["plan"], {});
+        if (!target) return;
+        resolvedPlanId = target.id;
+      }
+
+      const { nodes: taskNodes } = await client.expand(resolvedPlanId, {
         direction: "out",
         predicates: ["PLAN_HAS_TASK"],
       });
@@ -426,6 +570,35 @@ Examples:
         }
       }
 
+      // ── Run workflow if requested ──────────────────────────────────
+      let workflowResults: WorkflowRunResult[] | null = null;
+      let workflowData: StagedWorkflow | null = null;
+
+      if (nextActionable && (opts.withWorkflow || opts.runWorkflow)) {
+        const detail = await client.entity(nextActionable.id);
+        // Check claims first (for workflows attached via `ix workflow attach`), then attrs
+        const wfClaim = detail.claims?.find(
+          (c: any) => c.field === "workflow" || c.statement === "workflow"
+        );
+        const rawWorkflow = wfClaim ? (wfClaim as any).value : detail.node?.attrs?.workflow;
+        if (rawWorkflow) {
+          workflowData = normalizeWorkflow(rawWorkflow as string[] | StagedWorkflow);
+        }
+      }
+
+      if (nextActionable && opts.runWorkflow && workflowData) {
+        let stagesToRun = [...VALID_WORKFLOW_STAGES];
+        if (opts.stage) {
+          if (!VALID_WORKFLOW_STAGES.includes(opts.stage)) {
+            stderr(`Invalid stage "${opts.stage}". Valid: ${VALID_WORKFLOW_STAGES.join(", ")}`);
+            return;
+          }
+          stagesToRun = [opts.stage];
+        }
+        workflowResults = await runWorkflowStages(workflowData, stagesToRun);
+      }
+
+      // ── Output ─────────────────────────────────────────────────────
       if (opts.format === "json") {
         if (nextActionable) {
           const result: Record<string, unknown> = {
@@ -433,12 +606,11 @@ Examples:
             taskId: nextActionable.id,
             reason: "all dependencies satisfied",
           };
-          if (opts.withWorkflow) {
-            const detail = await client.entity(nextActionable.id);
-            const rawWorkflow = detail.node?.attrs?.workflow;
-            result.workflow = rawWorkflow
-              ? normalizeWorkflow(rawWorkflow as string[] | StagedWorkflow)
-              : {};
+          if (workflowData) {
+            result.workflow = workflowData;
+          }
+          if (workflowResults) {
+            result.workflowResults = workflowResults;
           }
           console.log(JSON.stringify(result, null, 2));
         } else {
@@ -447,22 +619,33 @@ Examples:
       } else {
         if (nextActionable) {
           console.log(`${chalk.green("Next:")} ${nextActionable.title} (${nextActionable.id.slice(0, 8)})`);
-          if (opts.withWorkflow) {
-            const detail = await client.entity(nextActionable.id);
-            const rawWorkflow = detail.node?.attrs?.workflow;
-            if (rawWorkflow) {
-              const staged = normalizeWorkflow(rawWorkflow as string[] | StagedWorkflow);
-              console.log(chalk.dim("Workflow:"));
-              for (const stage of VALID_WORKFLOW_STAGES) {
-                const cmds = staged[stage as keyof StagedWorkflow];
-                if (cmds && cmds.length > 0) {
-                  console.log(`  ${chalk.bold(stage)}:`);
-                  for (const cmd of cmds) {
-                    console.log(`    ${chalk.cyan("▸")} ${cmd}`);
-                  }
+          if (workflowData) {
+            console.log(chalk.dim("Workflow:"));
+            for (const stage of VALID_WORKFLOW_STAGES) {
+              const cmds = workflowData[stage as keyof StagedWorkflow];
+              if (cmds && cmds.length > 0) {
+                console.log(`  ${chalk.bold(stage)}:`);
+                for (const cmd of cmds) {
+                  console.log(`    ${chalk.cyan("▸")} ${cmd}`);
                 }
               }
             }
+          }
+          if (workflowResults) {
+            console.log();
+            for (const r of workflowResults) {
+              const icon = r.status === "ok" ? chalk.green("✓")
+                : r.status === "error" ? chalk.red("✗")
+                : chalk.yellow("⊘");
+              console.log(`  ${icon} ${chalk.dim(`[${r.stage}]`)} ${r.command}`);
+              if (r.status === "error" && r.error) {
+                console.log(`    ${chalk.red(r.error)}`);
+              }
+            }
+            const ok = workflowResults.filter(r => r.status === "ok").length;
+            const err = workflowResults.filter(r => r.status === "error").length;
+            const skip = workflowResults.filter(r => r.status === "skipped").length;
+            console.log(chalk.dim(`\nDone: ${ok} ok, ${err} error, ${skip} skipped`));
           }
         } else {
           console.log(chalk.dim(`No actionable tasks: ${noActionReason}`));
@@ -493,7 +676,18 @@ Examples:
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (taskId: string, opts: { withWorkflow?: boolean; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const details = await client.entity(taskId);
+
+      // Resolve task ID (accept name or UUID prefix)
+      let resolvedTaskId = taskId;
+      try {
+        resolvedTaskId = await client.resolvePrefix(taskId);
+      } catch {
+        const target = await resolveEntity(client, taskId, ["task"], {});
+        if (!target) return;
+        resolvedTaskId = target.id;
+      }
+
+      const details = await client.entity(resolvedTaskId);
       const node = details.node as any;
 
       const statusClaim = details.claims?.find(
@@ -503,11 +697,15 @@ Examples:
         ? ((statusClaim as any).value ?? (statusClaim as any).statement ?? "pending")
         : (node.attrs?.status ?? "pending");
 
-      const rawWorkflow = node.attrs?.workflow as string[] | StagedWorkflow | undefined;
+      // Check claims first (for workflows attached via `ix workflow attach`), then attrs
+      const workflowClaim = details.claims?.find(
+        (c: any) => c.field === "workflow" || c.statement === "workflow"
+      );
+      const rawWorkflow = (workflowClaim ? (workflowClaim as any).value : node.attrs?.workflow) as string[] | StagedWorkflow | undefined;
 
       if (opts.format === "json") {
         const result: Record<string, unknown> = {
-          taskId,
+          taskId: resolvedTaskId,
           title: node.name,
           status,
           created_at: node.attrs?.created_at ?? node.createdAt,

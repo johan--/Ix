@@ -35,7 +35,9 @@ import { registerPlansCommand } from "./commands/plans.js";
 import { registerWatchCommand } from "./commands/watch.js";
 import { registerBriefingCommand } from "./commands/briefing.js";
 import { registerWorkflowsHelpCommand } from "./commands/workflows.js";
+import { registerWorkflowCommand } from "./commands/workflow.js";
 import { registerTasksCommand } from "./commands/tasks.js";
+import { registerGoalsCommand } from "./commands/goals.js";
 
 const HELP_HEADER = `
 Workflow Commands (start here):
@@ -49,10 +51,12 @@ Planning & Tracking:
   plan                  Manage plans (create, task, status, next)
   task                  Manage tasks (show, update)
   tasks                 List all tasks across plans
+  workflow              Attach, show, validate, or run staged workflows
   bug                   Manage bugs (create, show, update)
   bugs                  List bugs
   decide <title>        Record a design decision
   goal                  Manage project goals
+  goals                 List all goals
 
 Core Graph / Code Commands:
   read <target>         Read file content or symbol source code
@@ -123,7 +127,9 @@ registerBugsCommand(program);
 registerPlansCommand(program);
 registerWatchCommand(program);
 registerBriefingCommand(program);
+registerWorkflowCommand(program);
 registerWorkflowsHelpCommand(program);
 registerTasksCommand(program);
+registerGoalsCommand(program);
 
 program.parse();

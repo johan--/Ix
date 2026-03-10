@@ -2,25 +2,23 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveEntity, printResolved, isRawId } from "../resolve.js";
+import { resolveFileOrEntity, printResolved, isRawId } from "../resolve.js";
 
 export function registerDependsCommand(program: Command): void {
   program
     .command("depends <symbol>")
     .description("Show what depends on the given entity (reverse CALLS + IMPORTS)")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--depth <n>", "Traversal depth (default 1)", "1")
     .option("--limit <n>", "Max results to show", "50")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", "\nExamples:\n  ix depends verify_token\n  ix depends AuthProvider --depth 2 --format json\n  ix depends parser.py --kind file --limit 20")
-    .action(async (symbol: string, opts: { kind?: string; depth: string; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; pick?: string; depth: string; limit: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
-      const target = await resolveEntity(
-        client, symbol,
-        ["method", "function", "class", "object", "trait", "interface", "module", "file"],
-        opts
-      );
+      const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
 
       const hops = parseInt(opts.depth, 10) || 1;

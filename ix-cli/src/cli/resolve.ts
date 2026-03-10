@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import chalk from "chalk";
 import type { IxClient } from "../client/api.js";
 import { stderr } from "./stderr.js";
@@ -14,7 +15,8 @@ export interface ResolvedEntity {
 
 export interface AmbiguousResult {
   resolutionMode: "ambiguous";
-  candidates: Array<{ id: string; name: string; kind: string; path?: string; score?: number }>;
+  candidates: Array<{ id: string; name: string; kind: string; path?: string; score?: number; rank?: number }>;
+  diagnostics?: Array<{ code: string; message: string }>;
 }
 
 export type ResolveResult =
@@ -98,7 +100,7 @@ export async function resolveEntity(
   client: IxClient,
   symbol: string,
   preferredKinds: string[],
-  opts?: { kind?: string; path?: string }
+  opts?: { kind?: string; path?: string; pick?: number }
 ): Promise<ResolvedEntity | null> {
   const result = await resolveEntityFull(client, symbol, preferredKinds, opts);
   if (result.resolved) return result.entity;
@@ -119,7 +121,7 @@ export async function resolveEntityFull(
   client: IxClient,
   symbol: string,
   preferredKinds: string[],
-  opts?: { kind?: string; path?: string }
+  opts?: { kind?: string; path?: string; pick?: number }
 ): Promise<ResolveResult> {
   const kindFilter = opts?.kind;
   const nodes = await client.search(symbol, { limit: 20, kind: kindFilter, nameOnly: true });
@@ -139,12 +141,22 @@ export async function resolveEntityFull(
   // Score exact-name candidates
   if (exactName.length > 0) {
     const winner = pickBest(exactName, symbol, preferredKinds, opts);
-    if (winner) return winner;
+    if (winner) {
+      const picked = applyPick(winner, opts);
+      if (picked) return picked;
+      if (!winner.resolved) return winner; // ambiguous but no --pick
+      return winner;
+    }
   }
 
   // ── Phase 2: Fall back to all candidates ────────────────────────────
   const winner = pickBest(nodes, symbol, preferredKinds, opts);
-  if (winner) return winner;
+  if (winner) {
+    const picked = applyPick(winner, opts);
+    if (picked) return picked;
+    if (!winner.resolved) return winner;
+    return winner;
+  }
 
   // Nothing resolved at all
   stderr(`No entity found matching "${symbol}".`);
@@ -243,6 +255,39 @@ function pickBest(
   };
 }
 
+/**
+ * When --pick is set and the result is ambiguous, select the candidate by 1-based index.
+ * Returns the resolved result, an error result, or null if --pick is not set.
+ */
+export function applyPick(
+  result: ResolveResult,
+  opts?: { pick?: number }
+): ResolveResult | null {
+  if (opts?.pick == null) return null;
+  if (result.resolved) return null; // already resolved, no need to pick
+  if (!result.ambiguous) return null;
+
+  const candidates = result.result.candidates;
+  const idx = opts.pick - 1; // convert 1-based to 0-based
+
+  if (idx < 0 || idx >= candidates.length) {
+    stderr(`--pick ${opts.pick} is out of range (1-${candidates.length}).`);
+    return { resolved: false, ambiguous: false };
+  }
+
+  const picked = candidates[idx];
+  return {
+    resolved: true,
+    entity: {
+      id: picked.id,
+      kind: picked.kind,
+      name: picked.name,
+      path: picked.path,
+      resolutionMode: "scored",
+    },
+  };
+}
+
 function resolutionMode(scored: { score: number }, opts?: { kind?: string }): ResolutionMode {
   if (opts?.kind) return "exact";
   if (scored.score <= 0) return "exact";
@@ -265,28 +310,36 @@ function nodeToResolved(node: any, symbol: string, mode: ResolutionMode): Resolv
 function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
   const seen = new Set<string>();
   const candidates: AmbiguousResult["candidates"] = [];
+  let rank = 0;
   for (let i = 0; i < nodes.length && i < 5; i++) {
     const node = nodes[i] as any;
     if (seen.has(node.id)) continue;
     seen.add(node.id);
+    rank++;
     candidates.push({
       id: node.id,
       name: node.name || node.attrs?.name || "(unnamed)",
       kind: node.kind ?? "",
       path: node.provenance?.sourceUri ?? node.provenance?.source_uri ?? node.path,
       score: scores?.[i],
+      rank,
     });
   }
-  return { resolutionMode: "ambiguous", candidates };
+  return {
+    resolutionMode: "ambiguous",
+    candidates,
+    diagnostics: [{ code: "ambiguous_resolution", message: "Use --pick <n> or --path to disambiguate." }],
+  };
 }
 
 function printAmbiguous(symbol: string, result: AmbiguousResult, opts?: { kind?: string; path?: string }): void {
   stderr(`Ambiguous symbol "${symbol}":`);
-  for (const c of result.candidates) {
+  for (let i = 0; i < result.candidates.length; i++) {
+    const c = result.candidates[i];
     const shortPath = c.path ? ` in ${c.path}` : "";
-    stderr(`  ${chalk.cyan((c.kind ?? "").padEnd(10))} ${chalk.dim(c.id.slice(0, 8))}  ${c.name}${chalk.dim(shortPath)}`);
+    stderr(`  ${i + 1}. ${chalk.cyan((c.kind ?? "").padEnd(10))} ${chalk.dim(c.id.slice(0, 8))}  ${c.name}${chalk.dim(shortPath)}`);
   }
-  const hints: string[] = [];
+  const hints: string[] = ["--pick <n>"];
   if (!opts?.kind) hints.push("--kind");
   if (!opts?.path) hints.push("--path");
   stderr(chalk.dim(`\nUse ${hints.join(" or ")} to disambiguate.`));
@@ -308,4 +361,124 @@ export function printResolved(target: ResolvedEntity): void {
 export function isRawId(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s)
     || /^[0-9a-f]{32,}$/i.test(s);
+}
+
+// ── File-first resolution ─────────────────────────────────────────────────
+
+/** Common file extensions that signal the target is file-like, not a symbol name. */
+const FILE_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".scala", ".sc", ".java", ".py", ".rb", ".go", ".rs",
+  ".md", ".mdx", ".rst", ".txt",
+  ".json", ".yaml", ".yml", ".toml", ".ini", ".conf",
+  ".sql", ".graphql", ".gql", ".sh", ".bash",
+  ".html", ".css", ".scss", ".less",
+]);
+
+export function looksFileLike(target: string): boolean {
+  if (target.includes("/") || target.includes("\\")) return true;
+  const ext = path.extname(target).toLowerCase();
+  return ext !== "" && FILE_EXTENSIONS.has(ext);
+}
+
+/**
+ * Resolve a target to a graph entity ID, trying file paths first.
+ *
+ * Resolution order:
+ *   1. Raw UUID → return directly
+ *   2. File-like input → search graph for matching file entity
+ *   3. Symbol name → use scored resolver
+ *
+ * Returns { id, name, kind } or null if not found.
+ */
+export async function resolveFileOrEntity(
+  client: IxClient,
+  target: string,
+  opts?: { kind?: string; path?: string; pick?: number }
+): Promise<ResolvedEntity | null> {
+  // 1. Raw UUID
+  if (isRawId(target)) {
+    try {
+      const details = await client.entity(target);
+      const n = details.node as any;
+      return {
+        id: target,
+        kind: n.kind || "unknown",
+        name: n.name || target,
+        resolutionMode: "exact",
+      };
+    } catch {
+      stderr(`Entity not found: ${target}`);
+      return null;
+    }
+  }
+
+  // 2. File-like input → try graph file search
+  if (looksFileLike(target)) {
+    const fileEntity = await tryFileGraphMatch(client, target);
+    if (fileEntity) return fileEntity;
+    // Fall through to symbol resolution
+  }
+
+  // 3. Symbol resolution (handles all entity kinds)
+  const allKinds = ["file", "class", "object", "trait", "interface", "module", "function", "method"];
+  return resolveEntity(client, target, allKinds, opts);
+}
+
+/**
+ * Search the graph for a file entity matching the target path or filename.
+ * Tries exact path match first, then basename match.
+ */
+async function tryFileGraphMatch(
+  client: IxClient,
+  target: string,
+): Promise<ResolvedEntity | null> {
+  const basename = path.basename(target);
+
+  // Search for file entities matching the basename
+  const nodes = await client.search(basename, { limit: 20, kind: "file", nameOnly: true });
+
+  // Filter to actual matches
+  const targetLower = target.toLowerCase();
+  const basenameLower = basename.toLowerCase();
+  const basenameNoExt = basename.replace(/\.[^.]+$/, "").toLowerCase();
+
+  const matches: Array<{ node: any; quality: number }> = [];
+  for (const n of nodes as any[]) {
+    const name = (n.name || "").toLowerCase();
+    const uri = (n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "").toLowerCase();
+
+    // Exact path match (best)
+    if (uri.endsWith(targetLower) || uri === targetLower) {
+      matches.push({ node: n, quality: 0 });
+    }
+    // Exact filename match
+    else if (name === basenameLower) {
+      matches.push({ node: n, quality: 1 });
+    }
+    // Bare name match (no extension)
+    else if (name.replace(/\.[^.]+$/, "") === basenameNoExt) {
+      matches.push({ node: n, quality: 2 });
+    }
+  }
+
+  if (matches.length === 0) return null;
+
+  // Sort by quality then pick best
+  matches.sort((a, b) => a.quality - b.quality);
+
+  // If multiple matches at same quality, prefer path-matching target
+  const best = matches[0];
+  if (matches.length > 1 && matches[0].quality === matches[1].quality && target.includes("/")) {
+    // Disambiguate by path when user provided a path
+    const pathMatch = matches.find(m => {
+      const uri = (m.node.provenance?.sourceUri ?? m.node.provenance?.source_uri ?? "").toLowerCase();
+      return uri.endsWith(targetLower);
+    });
+    if (pathMatch) {
+      return nodeToResolved(pathMatch.node, pathMatch.node.name, "exact");
+    }
+  }
+
+  return nodeToResolved(best.node, best.node.name || basename, best.quality === 0 ? "exact" : "scored");
 }

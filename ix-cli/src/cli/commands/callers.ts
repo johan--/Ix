@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint, resolveWorkspaceRoot } from "../config.js";
 import { formatEdgeResults } from "../format.js";
-import { resolveEntity, printResolved } from "../resolve.js";
+import { resolveFileOrEntity, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 
 const execFileAsync = promisify(execFile);
@@ -15,13 +15,15 @@ export function registerCallersCommand(program: Command): void {
     .command("callers <symbol>")
     .description("Show methods/functions that call the given symbol (cross-file)")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--limit <n>", "Max results to show", "50")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", "\nExamples:\n  ix callers verify_token\n  ix callers processPayment --format json\n  ix callers parse --kind method --limit 20")
-    .action(async (symbol: string, opts: { kind?: string; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; pick?: string; limit: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const limit = parseInt(opts.limit, 10);
-      const target = await resolveEntity(client, symbol, ["method", "function"], opts);
+      const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
       if (opts.format !== "json") printResolved(target);
       // Use expandByName for cross-file resolution
@@ -103,13 +105,15 @@ export function registerCallersCommand(program: Command): void {
     .command("callees <symbol>")
     .description("Show methods/functions called by the given symbol (cross-file)")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--limit <n>", "Max results to show", "50")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", "\nExamples:\n  ix callees processPayment\n  ix callees parse --format json")
-    .action(async (symbol: string, opts: { kind?: string; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; pick?: string; limit: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const calleeLimit = parseInt(opts.limit, 10);
-      const target = await resolveEntity(client, symbol, ["method", "function"], opts);
+      const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
       if (opts.format !== "json") printResolved(target);
       // Use expandByName for cross-file resolution

@@ -18,7 +18,7 @@ const REQUIRED_COMMANDS = [
   "read", "search", "locate", "contains", "callers", "callees",
   "imports", "entity", "status", "stats", "doctor", "history", "diff",
   "briefing", "overview", "impact", "rank", "inventory",
-  "plan", "task", "tasks", "bug", "bugs", "decide", "goal",
+  "plan", "task", "tasks", "workflow", "bug", "bugs", "decide", "goal", "goals",
   "ingest", "truth", "text", "explain",
 ];
 

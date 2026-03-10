@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveEntity, printResolved } from "../resolve.js";
+import { resolveFileOrEntity, printResolved } from "../resolve.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
 const CALLABLE_KINDS = new Set(["method", "function"]);
@@ -39,6 +39,8 @@ export function registerOverviewCommand(program: Command): void {
     .command("overview <target>")
     .description("Structural summary: members, relationships, decisions, and bugs for an entity")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--path <path>", "Prefer symbols from files matching this path substring")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText(
       "after",
@@ -49,12 +51,14 @@ Examples:
   ix overview IngestionService
   ix overview IngestionService --kind class
   ix overview verify_token --kind function --format json
-  ix overview auth.py --kind file`
+  ix overview src/cli/commands/overview.ts
+  ix overview overview.ts
+  ix overview scoreCandidate --pick 2`
     )
-    .action(async (symbol: string, opts: { kind?: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const allKinds = [...CONTAINER_KINDS, ...CALLABLE_KINDS];
-      const target = await resolveEntity(client, symbol, allKinds, opts);
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
 
       if (opts.format !== "json") printResolved(target);
