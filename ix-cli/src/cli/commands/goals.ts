@@ -11,7 +11,7 @@ export function registerGoalsCommand(program: Command): void {
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (opts: { status: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      let intents = await client.listTruth();
+      let intents = await client.listGoals();
 
       if (opts.status === "active") {
         const activeGoalIds = new Set<string>();

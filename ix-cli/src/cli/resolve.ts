@@ -172,6 +172,8 @@ function pickBest(
   preferredKinds: string[],
   opts?: { kind?: string; path?: string }
 ): ResolveResult | null {
+  // Here is a test
+  // LEt's see if it worked
   // Score all candidates
   const scored = candidates.map(n => ({
     node: n,
@@ -308,6 +310,7 @@ function nodeToResolved(node: any, symbol: string, mode: ResolutionMode): Resolv
 }
 
 function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
+  //this is a test
   const seen = new Set<string>();
   const candidates: AmbiguousResult["candidates"] = [];
   let rank = 0;

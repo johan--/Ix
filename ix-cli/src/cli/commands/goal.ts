@@ -8,7 +8,7 @@ import { stderr } from "../stderr.js";
 export function registerGoalCommand(program: Command): void {
   const goal = program
     .command("goal")
-    .description("Manage project goals (aliases for ix truth)")
+    .description("Manage project goals")
     .addHelpText(
       "after",
       `\nSubcommands:
@@ -35,7 +35,7 @@ Examples:
       const client = new IxClient(getEndpoint());
 
       // Check duplicate goal name
-      const existing = await client.listTruth();
+      const existing = await client.listGoals();
       const dup = existing.find(
         (i: any) => (i.name || i.statement || "").toLowerCase() === statement.toLowerCase(),
       );
@@ -45,7 +45,7 @@ Examples:
         return;
       }
 
-      const result = await client.createTruth(statement, opts.parent);
+      const result = await client.createGoal(statement, opts.parent);
       if (opts.format === "json") {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -65,7 +65,7 @@ Examples:
       try {
         goalId = await client.resolvePrefix(ref);
       } catch {
-        const intents = await client.listTruth();
+        const intents = await client.listGoals();
         const match = intents.find(
           (i: any) => (i.name || i.statement || "").toLowerCase() === ref.toLowerCase(),
         );
@@ -114,7 +114,7 @@ Examples:
     .option("--format <fmt>", "Output format (text|json)", "text")
     .action(async (opts: { status: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      let intents = await client.listTruth();
+      let intents = await client.listGoals();
 
       if (opts.status === "active") {
         // Filter to goals that have at least one plan with pending tasks

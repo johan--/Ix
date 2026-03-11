@@ -48,6 +48,64 @@ export function applyKindExclusion(nodes: any[], excludeKinds: string[]): any[] 
   return nodes.filter((node: any) => !excluded.has(node.kind));
 }
 
+/** Pluralize an entity kind for display */
+export function pluralize(kind: string): string {
+  if (kind.endsWith("ss") || kind.endsWith("ch") || kind.endsWith("sh") || kind.endsWith("x")) return kind + "es";
+  if (kind.endsWith("s")) return kind + "es";
+  if (kind.endsWith("y") && !/[aeiou]y$/i.test(kind)) return kind.slice(0, -1) + "ies";
+  return kind + "s";
+}
+
+interface ScoredEntity {
+  id: string;
+  name: string;
+  kind: string;
+  score: number;
+}
+
+/** Score all candidates in batches to avoid overwhelming the backend */
+async function scoreAllCandidates(
+  candidates: any[],
+  config: { direction: string; predicates: string[] },
+  client: IxClient,
+  diagnostics: string[],
+  entityKind: string,
+): Promise<ScoredEntity[]> {
+  const batchSize = 20;
+  const results: ScoredEntity[] = [];
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map(async (node: any) => {
+        try {
+          const result = await client.expand(node.id, {
+            direction: config.direction,
+            predicates: config.predicates,
+          });
+          const seen = new Set<string>();
+          for (const n of result.nodes) seen.add(n.id);
+          return {
+            id: node.id,
+            name: node.name || node.attrs?.name || "(unnamed)",
+            kind: node.kind || entityKind,
+            score: seen.size,
+          };
+        } catch {
+          diagnostics.push(`Failed to expand entity ${node.id}`);
+          return {
+            id: node.id,
+            name: node.name || node.attrs?.name || "(unnamed)",
+            kind: node.kind || entityKind,
+            score: 0,
+          };
+        }
+      })
+    );
+    results.push(...batchResults);
+  }
+  return results;
+}
+
 export function registerRankCommand(program: Command): void {
   program
     .command("rank")
@@ -95,7 +153,7 @@ export function registerRankCommand(program: Command): void {
         const diagnostics: string[] = [];
 
         // 1. Fetch all entities of the given kind
-        const allNodes = await client.listByKind(opts.kind, { limit: 200 });
+        const allNodes = await client.listByKind(opts.kind, { limit: 2000 });
 
         if (allNodes.length === 0) {
           if (isJson) {
@@ -141,48 +199,9 @@ export function registerRankCommand(program: Command): void {
           return;
         }
 
-        const totalCandidates = candidates.length;
-
-        // 4. Performance guard: cap entities to evaluate
-        const evalCap = Math.min(topN * 3, 60);
-        const toEvaluate = candidates.slice(0, evalCap);
-        if (candidates.length > evalCap) {
-          diagnostics.push(
-            `Evaluated ${evalCap} of ${totalCandidates} candidates (${totalCandidates} total). Increase --top or narrow --path for full coverage.`
-          );
-        }
-
-        // 5. Expand each entity and count the metric
+        // 4. Score ALL candidates (batched for performance)
         const config = METRIC_CONFIG[metric];
-        const scored = await Promise.all(
-          toEvaluate.map(async (node: any) => {
-            try {
-              const result = await client.expand(node.id, {
-                direction: config.direction,
-                predicates: config.predicates,
-              });
-              // Count unique nodes by id
-              const seen = new Set<string>();
-              for (const n of result.nodes) {
-                seen.add(n.id);
-              }
-              return {
-                id: node.id,
-                name: node.name || node.attrs?.name || "(unnamed)",
-                kind: node.kind || opts.kind,
-                score: seen.size,
-              };
-            } catch {
-              diagnostics.push(`Failed to expand entity ${node.id}`);
-              return {
-                id: node.id,
-                name: node.name || node.attrs?.name || "(unnamed)",
-                kind: node.kind || opts.kind,
-                score: 0,
-              };
-            }
-          })
-        );
+        const scored = await scoreAllCandidates(candidates, config, client, diagnostics, opts.kind);
 
         // 6. Sort descending, take top N
         scored.sort((a, b) => b.score - a.score);
@@ -195,11 +214,11 @@ export function registerRankCommand(program: Command): void {
             kind: opts.kind,
             scope: opts.path ?? null,
             results,
-            summary: { evaluated: toEvaluate.length, totalCandidates, returned: results.length },
+            summary: { evaluated: candidates.length, totalCandidates: candidates.length, returned: results.length },
             diagnostics,
           }, null, 2));
         } else {
-          console.log(chalk.bold(`Top ${results.length} ${opts.kind}s by ${metric}:`));
+          console.log(chalk.bold(`Top ${results.length} ${pluralize(opts.kind)} by ${metric}:`));
           const maxNameLen = Math.max(...results.map((r) => r.name.length), 1);
           for (let i = 0; i < results.length; i++) {
             const r = results[i];

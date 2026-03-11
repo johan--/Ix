@@ -115,6 +115,17 @@ export class IxClient {
     });
   }
 
+  async listGoals(): Promise<GraphNode[]> {
+    return this.get("/v1/goal");
+  }
+
+  async createGoal(
+    statement: string,
+    parentGoal?: string
+  ): Promise<{ status: string; nodeId: string; rev: number }> {
+    return this.post("/v1/goal", { statement, parentGoal });
+  }
+
   async listTruth(): Promise<GraphNode[]> {
     return this.get("/v1/truth");
   }

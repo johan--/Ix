@@ -1,6 +1,4 @@
 import * as fs from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Command } from "commander";
 import chalk from "chalk";
 import type { PatchOp, GraphPatchPayload } from "../../client/types.js";
@@ -11,11 +9,12 @@ import {
   type StagedWorkflow,
   isValidWorkflow,
   normalizeWorkflow,
+  extractWorkflow,
   VALID_WORKFLOW_STAGES,
-} from "./plan.js";
+  runWorkflowStages,
+  type WorkflowRunResult,
+} from "../task-utils.js";
 import { stderr } from "../stderr.js";
-
-const execFileAsync = promisify(execFile);
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -57,109 +56,6 @@ async function resolveTargetEntity(
   }
 }
 
-/**
- * Extract workflow from an entity, checking claims first (for post-attach updates),
- * then falling back to node.attrs (for inline workflows set at creation time).
- */
-export function extractWorkflow(node: any, claims?: any[]): StagedWorkflow | null {
-  // Claims take precedence (workflow set via AssertClaim, e.g. workflow attach)
-  if (claims) {
-    const workflowClaim = claims.find(
-      (c: any) => c.field === "workflow" || c.statement === "workflow"
-    );
-    if (workflowClaim) {
-      const val = (workflowClaim as any).value;
-      if (val && isValidWorkflow(val)) {
-        return normalizeWorkflow(val as string[] | StagedWorkflow);
-      }
-    }
-  }
-  // Fall back to node attrs (workflow set at creation time)
-  const raw = node.attrs?.workflow;
-  if (!raw) return null;
-  if (!isValidWorkflow(raw)) return null;
-  return normalizeWorkflow(raw as string[] | StagedWorkflow);
-}
-
-interface WorkflowRunResult {
-  stage: string;
-  command: string;
-  status: "ok" | "error" | "skipped";
-  output?: unknown;
-  error?: string;
-}
-
-async function executeIxCommand(cmd: string): Promise<WorkflowRunResult["output"]> {
-  // Strip leading "ix " and split into args
-  const trimmed = cmd.replace(/^ix\s+/, "");
-  const args = trimmed.split(/\s+/);
-
-  // Always append --format json for structured output
-  if (!args.includes("--format") && !args.includes("-f")) {
-    args.push("--format", "json");
-  }
-
-  const { stdout } = await execFileAsync("ix", args, {
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 60_000,
-  });
-
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    return stdout.trim();
-  }
-}
-
-async function runWorkflowStages(
-  workflow: StagedWorkflow,
-  stages: string[],
-): Promise<WorkflowRunResult[]> {
-  const results: WorkflowRunResult[] = [];
-
-  for (const stage of stages) {
-    const cmds = workflow[stage as keyof StagedWorkflow];
-    if (!cmds || cmds.length === 0) continue;
-
-    for (const cmd of cmds) {
-      // Security: only allow ix commands
-      if (!cmd.trimStart().startsWith("ix ") && cmd.trim() !== "ix") {
-        results.push({
-          stage,
-          command: cmd,
-          status: "skipped",
-          error: "Only ix commands are allowed in workflows",
-        });
-        continue;
-      }
-
-      // Security: no pipes, semicolons, backticks, $(), etc.
-      if (/[|;&`$()]/.test(cmd)) {
-        results.push({
-          stage,
-          command: cmd,
-          status: "skipped",
-          error: "Pipes, shell operators, and variable expansion are not allowed",
-        });
-        continue;
-      }
-
-      try {
-        const output = await executeIxCommand(cmd);
-        results.push({ stage, command: cmd, status: "ok", output });
-      } catch (err: any) {
-        results.push({
-          stage,
-          command: cmd,
-          status: "error",
-          error: err.message || String(err),
-        });
-      }
-    }
-  }
-
-  return results;
-}
 
 // ── Patch builder ─────────────────────────────────────────────────
 

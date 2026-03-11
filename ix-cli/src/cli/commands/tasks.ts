@@ -2,14 +2,12 @@ import type { Command } from "commander";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import chalk from "chalk";
-
-const STATUS_ICONS: Record<string, string> = {
-  pending: "○",
-  in_progress: "◐",
-  blocked: "✖",
-  done: "●",
-  abandoned: "⊘",
-};
+import {
+  STATUS_ICONS,
+  getTaskStatus,
+  getWorkflowState,
+  formatWorkflowStateCompact,
+} from "../task-utils.js";
 
 export function registerTasksCommand(program: Command): void {
   program
@@ -52,13 +50,25 @@ export function registerTasksCommand(program: Command): void {
           taskNodes = await client.listByKind("task", { limit });
         }
 
-        // Map to result shape using attrs (fast path, no per-entity fetch)
-        let results = taskNodes.map((n: any) => ({
-          id: n.id,
-          name: n.name || n.attrs?.name || "(unnamed)",
-          status: (n.attrs?.status as string) ?? "pending",
-          planId: opts.plan ?? null,
-        }));
+        // Fetch entity details per task to read claim-based status
+        const entityDetails = await Promise.all(
+          taskNodes.map((n: any) => client.entity(n.id).catch(() => null))
+        );
+
+        let results = taskNodes.map((n: any, i: number) => {
+          const detail = entityDetails[i];
+          const status = detail
+            ? getTaskStatus(detail)
+            : ((n.attrs?.status as string) ?? "pending");
+          const workflowState = detail ? getWorkflowState(detail) : null;
+          return {
+            id: n.id,
+            name: n.name || n.attrs?.name || "(unnamed)",
+            status,
+            planId: opts.plan ?? null,
+            ...(workflowState ? { workflowState } : {}),
+          };
+        });
 
         const total = results.length;
 
@@ -86,8 +96,11 @@ export function registerTasksCommand(program: Command): void {
           console.log(chalk.bold(`Tasks (${results.length})`));
           for (const t of results) {
             const icon = STATUS_ICONS[t.status] ?? "?";
+            const wfSuffix = (t as any).workflowState
+              ? ` ${chalk.dim(formatWorkflowStateCompact((t as any).workflowState))}`
+              : "";
             console.log(
-              `  ${icon} ${chalk.dim(`[${t.status}]`.padEnd(14))} ${t.name}`
+              `  ${icon} ${chalk.dim(`[${t.status}]`.padEnd(14))} ${t.name}${wfSuffix}`
             );
           }
           if (total !== results.length) {

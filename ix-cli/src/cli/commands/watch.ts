@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
@@ -26,7 +27,22 @@ const IGNORE_DIRS = new Set([
   ".cache", "__pycache__", ".ix", ".claude",
 ]);
 
-const DEBOUNCE_MS = 1500;
+const DEBOUNCE_MS = 300;
+
+/** Compute SHA-256 hash of file content for dedup. */
+function hashContent(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+/** Read file content safely, returning null if inaccessible. */
+export function readFileContent(filePath: string): string | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
 
 export function registerWatchCommand(program: Command): void {
   program
@@ -60,8 +76,9 @@ export function registerWatchCommand(program: Command): void {
       console.log(chalk.dim(`[watch] Debounce: ${DEBOUNCE_MS}ms`));
       console.log(chalk.dim("[watch] Press Ctrl+C to stop.\n"));
 
-      // Track pending changes with debounce
+      // Track pending changes with debounce + content hash dedup
       const pending = new Map<string, NodeJS.Timeout>();
+      const lastHash = new Map<string, string>();
 
       function shouldWatch(filePath: string): boolean {
         const ext = path.extname(filePath).toLowerCase();
@@ -74,8 +91,21 @@ export function registerWatchCommand(program: Command): void {
 
       async function ingestFile(filePath: string): Promise<void> {
         const rel = path.relative(root, filePath);
+
+        // Re-read content at actual ingest time (not at event time)
+        const content = readFileContent(filePath);
+        if (content === null) return;
+
+        // Skip if content hash is unchanged since last ingest
+        const hash = hashContent(content);
+        if (lastHash.get(filePath) === hash) {
+          console.log(`${chalk.dim("[watch]")} unchanged (hash): ${rel}`);
+          return;
+        }
+
         try {
           const result = await client.ingest(filePath, false);
+          lastHash.set(filePath, hash);
           if (result.patchesApplied > 0) {
             console.log(`${chalk.cyan("[watch]")} ingested: ${chalk.bold(rel)} → rev ${result.latestRev}`);
           } else {
@@ -102,13 +132,9 @@ export function registerWatchCommand(program: Command): void {
           const existing = pending.get(fullPath);
           if (existing) clearTimeout(existing);
 
-          // Set new debounce
+          // Set new debounce — content is re-read at ingest time, not here
           pending.set(fullPath, setTimeout(async () => {
             pending.delete(fullPath);
-
-            // Double-check file still exists and is stable
-            if (!fs.existsSync(fullPath)) return;
-
             console.log(`${chalk.dim("[watch]")} changed: ${rel}`);
             await ingestFile(fullPath);
           }, DEBOUNCE_MS));

@@ -22,9 +22,9 @@ const mainContent = fs.readFileSync(mainTsPath, "utf-8");
 // ── Name-based resolution for --goal and --plan ──────────────────────
 
 describe("plan create --goal accepts name", () => {
-  it("plan create resolves --goal via resolvePrefix then listTruth", () => {
+  it("plan create resolves --goal via resolvePrefix then listGoals", () => {
     expect(planContent).toContain("client.resolvePrefix(opts.goal)");
-    expect(planContent).toContain("client.listTruth()");
+    expect(planContent).toContain("client.listGoals()");
   });
 
   it("plan create --goal option says id-or-name", () => {
@@ -37,7 +37,7 @@ describe("plan create --goal accepts name", () => {
   });
 
   it("plan create falls back to goal name search when prefix fails", () => {
-    // Should search listTruth and find by name
+    // Should search listGoals and find by name
     expect(planContent).toContain("opts.goal.toLowerCase()");
   });
 });
@@ -77,9 +77,9 @@ describe("goal show command", () => {
     expect(goalContent).toContain('command("show <ref>")');
   });
 
-  it("goal show resolves by name via listTruth", () => {
+  it("goal show resolves by name via listGoals", () => {
     expect(goalContent).toContain("client.resolvePrefix(ref)");
-    expect(goalContent).toContain("client.listTruth()");
+    expect(goalContent).toContain("client.listGoals()");
   });
 
   it("goal show fetches entity details", () => {
@@ -103,7 +103,7 @@ describe("goal show command", () => {
 
 describe("goal create duplicate prevention", () => {
   it("goal create checks for existing goal with same name", () => {
-    expect(goalContent).toContain("client.listTruth()");
+    expect(goalContent).toContain("client.listGoals()");
     expect(goalContent).toContain("statement.toLowerCase()");
   });
 

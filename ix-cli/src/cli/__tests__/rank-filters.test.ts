@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyPathFilters, applyKindExclusion, getSourceUri } from "../commands/rank.js";
+import { applyPathFilters, applyKindExclusion, getSourceUri, pluralize } from "../commands/rank.js";
 
 describe("getSourceUri", () => {
   it("extracts from provenance.sourceUri", () => {
@@ -74,5 +74,36 @@ describe("applyKindExclusion", () => {
   it("returns all when no exclusions", () => {
     const result = applyKindExclusion(nodes, []);
     expect(result.length).toBe(4);
+  });
+});
+
+describe("pluralize", () => {
+  it("pluralizes regular words", () => {
+    expect(pluralize("method")).toBe("methods");
+    expect(pluralize("module")).toBe("modules");
+    expect(pluralize("function")).toBe("functions");
+  });
+
+  it("pluralizes words ending in 's'", () => {
+    expect(pluralize("class")).toBe("classes");
+  });
+
+  it("pluralizes words ending in 'ss'", () => {
+    expect(pluralize("class")).toBe("classes");
+  });
+
+  it("pluralizes words ending in 'ch', 'sh', 'x'", () => {
+    expect(pluralize("match")).toBe("matches");
+    expect(pluralize("index")).toBe("indexes");
+  });
+
+  it("pluralizes words ending in consonant + 'y'", () => {
+    expect(pluralize("entry")).toBe("entries");
+    expect(pluralize("factory")).toBe("factories");
+  });
+
+  it("does not change 'y' after vowel", () => {
+    expect(pluralize("key")).toBe("keys");
+    expect(pluralize("array")).toBe("arrays");
   });
 });

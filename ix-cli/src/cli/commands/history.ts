@@ -10,15 +10,18 @@ export function registerHistoryCommand(program: Command): void {
     .command("history <target>")
     .description("Show provenance chain for a file or entity")
     .option("--kind <kind>", "Filter target entity by kind")
+    .option("--path <path>", "Prefer symbols from files matching this path substring")
+    .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", `\nExamples:
   ix history ix-cli/src/cli/commands/decide.ts
   ix history decide.ts
   ix history IngestionService --kind class
   ix history <entity-uuid>`)
-    .action(async (target: string, opts: { kind?: string; format: string }) => {
+    .action(async (target: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
-      const resolved = await resolveFileOrEntity(client, target, opts);
+      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const resolved = await resolveFileOrEntity(client, target, resolveOpts);
       if (!resolved) return;
 
       if (opts.format !== "json") printResolved(resolved);

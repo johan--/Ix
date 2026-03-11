@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { buildWorkflowAttachPatch, extractWorkflow } from "../commands/workflow.js";
-import { isValidWorkflow, normalizeWorkflow } from "../commands/plan.js";
+import { buildWorkflowAttachPatch } from "../commands/workflow.js";
+import { extractWorkflow, isValidWorkflow, normalizeWorkflow } from "../task-utils.js";
 
 const workflowTsPath = path.resolve(__dirname, "../commands/workflow.ts");
 const workflowContent = fs.readFileSync(workflowTsPath, "utf-8");
@@ -179,19 +179,16 @@ describe("extractWorkflow claims integration", () => {
   });
 });
 
-describe("plan.ts workflow retrieval checks claims", () => {
+describe("plan.ts workflow retrieval uses extractWorkflow", () => {
   const planTsPath = path.resolve(__dirname, "../commands/plan.ts");
   const planContent = fs.readFileSync(planTsPath, "utf-8");
 
-  it("task show checks claims for workflow", () => {
-    // Should check both field and statement keys for claim matching
-    expect(planContent).toContain('c.field === "workflow" || c.statement === "workflow"');
+  it("task show uses extractWorkflow for workflow retrieval", () => {
+    expect(planContent).toContain("extractWorkflow");
   });
 
-  it("plan next checks claims for workflow", () => {
-    // Should have two occurrences of workflow claim checking (task show + plan next)
-    const matches = planContent.match(/c\.field === "workflow" \|\| c\.statement === "workflow"/g);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+  it("plan.ts imports extractWorkflow from task-utils", () => {
+    expect(planContent).toContain('from "../task-utils.js"');
+    expect(planContent).toContain("extractWorkflow");
   });
 });

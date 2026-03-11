@@ -1,93 +1,30 @@
 import type { Command } from "commander";
 import type { GraphPatchPayload, PatchOp } from "../../client/types.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { deterministicId } from "../github/transform.js";
 import { resolveEntity, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import chalk from "chalk";
+import {
+  type StagedWorkflow,
+  type WorkflowRunResult,
+  type WorkflowState,
+  type WorkflowStageStatus,
+  VALID_STATUSES,
+  STATUS_ICONS,
+  VALID_WORKFLOW_STAGES,
+  isValidWorkflow,
+  normalizeWorkflow,
+  getTaskStatus,
+  getWorkflowState,
+  extractWorkflow,
+  runWorkflowStages,
+  formatWorkflowStateCompact,
+} from "../task-utils.js";
 
-const execFileAsync = promisify(execFile);
-
-// ── Types ───────────────────────────────────────────────────────────
-
-export interface StagedWorkflow {
-  discover?: string[];
-  implement?: string[];
-  validate?: string[];
-}
-
-export const VALID_WORKFLOW_STAGES = ["discover", "implement", "validate"];
-
-export function isValidWorkflow(w: unknown): w is string[] | StagedWorkflow {
-  if (Array.isArray(w)) return w.every(s => typeof s === "string");
-  if (typeof w === "object" && w !== null) {
-    return Object.keys(w).every(k => VALID_WORKFLOW_STAGES.includes(k));
-  }
-  return false;
-}
-
-/** Normalize any workflow form to StagedWorkflow for display */
-export function normalizeWorkflow(w: string[] | StagedWorkflow): StagedWorkflow {
-  if (Array.isArray(w)) return { discover: w };
-  return w;
-}
-
-/** Run workflow stages — constrained to ix commands only. */
-interface WorkflowRunResult {
-  stage: string;
-  command: string;
-  status: "ok" | "error" | "skipped";
-  output?: unknown;
-  error?: string;
-}
-
-async function executeIxCommand(cmd: string): Promise<unknown> {
-  const trimmed = cmd.replace(/^ix\s+/, "");
-  const args = trimmed.split(/\s+/);
-  if (!args.includes("--format") && !args.includes("-f")) {
-    args.push("--format", "json");
-  }
-  const { stdout } = await execFileAsync("ix", args, {
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 60_000,
-  });
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    return stdout.trim();
-  }
-}
-
-async function runWorkflowStages(
-  workflow: StagedWorkflow,
-  stages: string[],
-): Promise<WorkflowRunResult[]> {
-  const results: WorkflowRunResult[] = [];
-  for (const stage of stages) {
-    const cmds = workflow[stage as keyof StagedWorkflow];
-    if (!cmds || cmds.length === 0) continue;
-    for (const cmd of cmds) {
-      if (!cmd.trimStart().startsWith("ix ") && cmd.trim() !== "ix") {
-        results.push({ stage, command: cmd, status: "skipped", error: "Only ix commands are allowed" });
-        continue;
-      }
-      if (/[|;&`$()]/.test(cmd)) {
-        results.push({ stage, command: cmd, status: "skipped", error: "Shell operators not allowed" });
-        continue;
-      }
-      try {
-        const output = await executeIxCommand(cmd);
-        results.push({ stage, command: cmd, status: "ok", output });
-      } catch (err: any) {
-        results.push({ stage, command: cmd, status: "error", error: err.message || String(err) });
-      }
-    }
-  }
-  return results;
-}
+// Re-export for backward compatibility (other modules may import from plan.js)
+export { type StagedWorkflow, VALID_WORKFLOW_STAGES, isValidWorkflow, normalizeWorkflow };
 
 // ── Patch builders (exported for testing) ──────────────────────────
 
@@ -229,17 +166,17 @@ export function buildTaskUpdatePatch(taskId: string, status: string): GraphPatch
   return makePatchEnvelope(ops, `Update task ${taskId} status to ${status}`);
 }
 
+export function buildWorkflowStatePatch(taskId: string, state: WorkflowState): GraphPatchPayload {
+  return makePatchEnvelope([{
+    type: "AssertClaim",
+    entityId: taskId,
+    field: "workflow_state",
+    value: state,
+    confidence: 1.0,
+  }], `Update workflow state for ${taskId}`);
+}
+
 // ── CLI commands ───────────────────────────────────────────────────
-
-const VALID_STATUSES = ["pending", "in_progress", "blocked", "done", "abandoned"];
-
-const STATUS_ICONS: Record<string, string> = {
-  pending: "○",
-  in_progress: "◐",
-  blocked: "✖",
-  done: "●",
-  abandoned: "⊘",
-};
 
 export function registerPlanCommand(program: Command): void {
   const plan = program
@@ -279,8 +216,8 @@ Examples:
       try {
         goalId = await client.resolvePrefix(opts.goal);
       } catch {
-        const intents = await client.listTruth();
-        const match = intents.find(
+        const goals = await client.listGoals();
+        const match = goals.find(
           (i: any) => (i.name || i.statement || "").toLowerCase() === opts.goal.toLowerCase(),
         );
         if (match) {
@@ -427,13 +364,14 @@ Examples:
         predicates: ["PLAN_HAS_TASK"],
       });
 
-      const tasks: { id: string; title: string; status: string; dependsOn: string[] }[] = [];
+      const tasks: { id: string; title: string; status: string; dependsOn: string[]; workflowState: WorkflowState | null }[] = [];
 
       for (const node of taskNodes) {
         if (node.kind !== "task") continue;
         // Get entity details for status and deps
         const entityDetail = await client.entity(node.id);
         const status = getTaskStatus(entityDetail);
+        const wfState = getWorkflowState(entityDetail);
 
         // Expand DEPENDS_ON for this task
         const { edges: depEdges } = await client.expand(node.id, {
@@ -447,6 +385,7 @@ Examples:
           title: node.name,
           status,
           dependsOn,
+          workflowState: wfState,
         });
       }
 
@@ -493,7 +432,11 @@ Examples:
       if (opts.format === "json") {
         console.log(JSON.stringify({
           planId: resolvedPlanId,
-          tasks: tasks.map(t => ({ title: t.title, status: t.status, id: t.id })),
+          tasks: tasks.map(t => {
+            const entry: Record<string, unknown> = { title: t.title, status: t.status, id: t.id };
+            if (t.workflowState) entry.workflowState = t.workflowState;
+            return entry;
+          }),
           criticalPath,
           nextActionable: nextActionable ? nextActionable.id : null,
           summary,
@@ -501,7 +444,8 @@ Examples:
       } else {
         for (const t of tasks) {
           const icon = STATUS_ICONS[t.status] ?? "?";
-          console.log(`  ${icon} ${chalk.dim(`[${t.status}]`.padEnd(14))} ${t.title}`);
+          const wfSuffix = t.workflowState ? ` ${chalk.dim(formatWorkflowStateCompact(t.workflowState))}` : "";
+          console.log(`  ${icon} ${chalk.dim(`[${t.status}]`.padEnd(14))} ${t.title}${wfSuffix}`);
         }
         if (nextActionable) {
           console.log(`\n${chalk.green("Next:")} ${nextActionable.title}`);
@@ -573,17 +517,12 @@ Examples:
       // ── Run workflow if requested ──────────────────────────────────
       let workflowResults: WorkflowRunResult[] | null = null;
       let workflowData: StagedWorkflow | null = null;
+      let nextWorkflowState: WorkflowState | null = null;
 
       if (nextActionable && (opts.withWorkflow || opts.runWorkflow)) {
         const detail = await client.entity(nextActionable.id);
-        // Check claims first (for workflows attached via `ix workflow attach`), then attrs
-        const wfClaim = detail.claims?.find(
-          (c: any) => c.field === "workflow" || c.statement === "workflow"
-        );
-        const rawWorkflow = wfClaim ? (wfClaim as any).value : detail.node?.attrs?.workflow;
-        if (rawWorkflow) {
-          workflowData = normalizeWorkflow(rawWorkflow as string[] | StagedWorkflow);
-        }
+        workflowData = extractWorkflow(detail.node, detail.claims);
+        nextWorkflowState = getWorkflowState(detail);
       }
 
       if (nextActionable && opts.runWorkflow && workflowData) {
@@ -608,6 +547,9 @@ Examples:
           };
           if (workflowData) {
             result.workflow = workflowData;
+          }
+          if (nextWorkflowState) {
+            result.workflowState = nextWorkflowState;
           }
           if (workflowResults) {
             result.workflowResults = workflowResults;
@@ -689,19 +631,9 @@ Examples:
 
       const details = await client.entity(resolvedTaskId);
       const node = details.node as any;
-
-      const statusClaim = details.claims?.find(
-        (c: any) => c.field === "status" || c.statement?.includes("status")
-      );
-      const status = statusClaim
-        ? ((statusClaim as any).value ?? (statusClaim as any).statement ?? "pending")
-        : (node.attrs?.status ?? "pending");
-
-      // Check claims first (for workflows attached via `ix workflow attach`), then attrs
-      const workflowClaim = details.claims?.find(
-        (c: any) => c.field === "workflow" || c.statement === "workflow"
-      );
-      const rawWorkflow = (workflowClaim ? (workflowClaim as any).value : node.attrs?.workflow) as string[] | StagedWorkflow | undefined;
+      const status = getTaskStatus(details);
+      const workflow = extractWorkflow(node, details.claims);
+      const workflowState = getWorkflowState(details);
 
       if (opts.format === "json") {
         const result: Record<string, unknown> = {
@@ -711,20 +643,30 @@ Examples:
           created_at: node.attrs?.created_at ?? node.createdAt,
         };
         if (opts.withWorkflow) {
-          result.workflow = rawWorkflow
-            ? normalizeWorkflow(rawWorkflow)
-            : {};
+          result.workflow = workflow ?? {};
+        }
+        if (workflowState) {
+          result.workflowState = workflowState;
         }
         console.log(JSON.stringify(result, null, 2));
       } else {
         const icon = STATUS_ICONS[status] ?? "?";
         console.log(`${icon} ${chalk.bold(node.name)}`);
         console.log(`  Status: ${status}`);
-        if (opts.withWorkflow && rawWorkflow) {
-          const staged = normalizeWorkflow(rawWorkflow);
-          console.log(chalk.dim("  Workflow:"));
+        if (workflowState) {
+          const parts: string[] = [];
           for (const stage of VALID_WORKFLOW_STAGES) {
-            const cmds = staged[stage as keyof StagedWorkflow];
+            const sv = (workflowState as any)[stage];
+            if (sv) parts.push(`${stage} [${sv}]`);
+          }
+          if (parts.length > 0) {
+            console.log(`  Workflow: ${parts.join("  ")}`);
+          }
+        }
+        if (opts.withWorkflow && workflow) {
+          console.log(chalk.dim("  Workflow commands:"));
+          for (const stage of VALID_WORKFLOW_STAGES) {
+            const cmds = workflow[stage as keyof StagedWorkflow];
             if (cmds && cmds.length > 0) {
               console.log(`    ${chalk.bold(stage)}:`);
               for (const cmd of cmds) {
@@ -738,39 +680,112 @@ Examples:
 
   task
     .command("update <taskId>")
-    .description("Update a task's status")
-    .requiredOption("--status <status>", `Status (${VALID_STATUSES.join("|")})`)
+    .description("Update a task's status and/or run a workflow stage")
+    .option("--status <status>", `Status (${VALID_STATUSES.join("|")})`)
+    .option("--run-workflow <stage>", "Run a workflow stage (discover|implement|validate)")
     .option("--format <fmt>", "Output format (text|json)", "text")
-    .action(async (taskId: string, opts: { status: string; format: string }) => {
-      if (!VALID_STATUSES.includes(opts.status)) {
+    .action(async (taskId: string, opts: { status?: string; runWorkflow?: string; format: string }) => {
+      if (!opts.status && !opts.runWorkflow) {
+        stderr("At least one of --status or --run-workflow is required.");
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.status && !VALID_STATUSES.includes(opts.status)) {
         stderr(`Invalid status "${opts.status}". Valid: ${VALID_STATUSES.join(", ")}`);
         process.exitCode = 1;
         return;
       }
+      if (opts.runWorkflow && !VALID_WORKFLOW_STAGES.includes(opts.runWorkflow)) {
+        stderr(`Invalid stage "${opts.runWorkflow}". Valid: ${VALID_WORKFLOW_STAGES.join(", ")}`);
+        process.exitCode = 1;
+        return;
+      }
       const client = new IxClient(getEndpoint());
-      const patch = buildTaskUpdatePatch(taskId, opts.status);
-      const result = await client.commitPatch(patch);
+
+      // Resolve task ID (accept name or UUID prefix)
+      let resolvedTaskId = taskId;
+      try {
+        resolvedTaskId = await client.resolvePrefix(taskId);
+      } catch {
+        const target = await resolveEntity(client, taskId, ["task"], {});
+        if (!target) {
+          process.exitCode = 1;
+          return;
+        }
+        resolvedTaskId = target.id;
+      }
+
+      let lastRev: number | undefined;
+
+      // Handle --status
+      if (opts.status) {
+        const patch = buildTaskUpdatePatch(resolvedTaskId, opts.status);
+        const result = await client.commitPatch(patch);
+        lastRev = result.rev;
+      }
+
+      // Handle --run-workflow
+      let workflowResults: WorkflowRunResult[] | null = null;
+      if (opts.runWorkflow) {
+        const details = await client.entity(resolvedTaskId);
+        const workflow = extractWorkflow(details.node, details.claims);
+        if (!workflow) {
+          stderr("No workflow attached to this task.");
+          if (!opts.status) {
+            process.exitCode = 1;
+            return;
+          }
+        } else {
+          // Get current workflow state or initialize
+          const currentState = getWorkflowState(details) ?? {};
+          const stage = opts.runWorkflow as keyof WorkflowState;
+
+          // Set stage to "running"
+          const runningState: WorkflowState = { ...currentState, [stage]: "running" as WorkflowStageStatus };
+          const runningPatch = buildWorkflowStatePatch(resolvedTaskId, runningState);
+          await client.commitPatch(runningPatch);
+
+          // Run the stage
+          workflowResults = await runWorkflowStages(workflow, [opts.runWorkflow]);
+
+          // Determine final stage status
+          let finalStatus: WorkflowStageStatus = "done";
+          if (workflowResults.length === 0) {
+            finalStatus = "skipped";
+          } else if (workflowResults.some(r => r.status === "error")) {
+            finalStatus = "failed";
+          }
+
+          // Persist final stage state
+          const finalState: WorkflowState = { ...runningState, [stage]: finalStatus };
+          const finalPatch = buildWorkflowStatePatch(resolvedTaskId, finalState);
+          const finalResult = await client.commitPatch(finalPatch);
+          lastRev = finalResult.rev;
+        }
+      }
+
       if (opts.format === "json") {
-        console.log(JSON.stringify({ taskId, status: opts.status, rev: result.rev }, null, 2));
+        const result: Record<string, unknown> = { taskId: resolvedTaskId };
+        if (opts.status) result.status = opts.status;
+        if (lastRev !== undefined) result.rev = lastRev;
+        if (workflowResults) result.workflowResults = workflowResults;
+        console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(`Task ${taskId.slice(0, 8)} updated to ${opts.status} (rev ${result.rev})`);
+        if (opts.status) {
+          console.log(`Task ${resolvedTaskId.slice(0, 8)} updated to ${opts.status}${lastRev !== undefined ? ` (rev ${lastRev})` : ""}`);
+        }
+        if (workflowResults) {
+          for (const r of workflowResults) {
+            const icon = r.status === "ok" ? chalk.green("\u2713")
+              : r.status === "error" ? chalk.red("\u2717")
+              : chalk.yellow("\u2298");
+            console.log(`  ${icon} ${chalk.dim(`[${r.stage}]`)} ${r.command}`);
+            if (r.status === "error" && r.error) {
+              console.log(`    ${chalk.red(r.error)}`);
+            }
+          }
+        }
       }
     });
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
-
-function getTaskStatus(entityDetail: { node: any; claims: any[]; edges: any[] }): string {
-  // Check claims first (status updates come via AssertClaim)
-  const statusClaim = entityDetail.claims?.find(
-    (c: any) => c.field === "status" || c.statement?.includes("status")
-  );
-  if (statusClaim) {
-    const val = (statusClaim as any).value ?? (statusClaim as any).statement;
-    if (typeof val === "string" && VALID_STATUSES.includes(val)) return val;
-  }
-  // Fall back to node attrs
-  const attrStatus = entityDetail.node?.attrs?.status;
-  if (typeof attrStatus === "string") return attrStatus;
-  return "pending";
-}
