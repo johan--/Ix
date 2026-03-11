@@ -16,7 +16,7 @@ interface RelatedItem {
   name: string;
   kind: string;
   id?: string;
-  relationship: "contains" | "contained-by" | "depends-on" | "imported-by" | "calls" | "called-by";
+  relationship: "contains" | "contained-by" | "depends-on" | "imported-by" | "calls" | "called-by" | "referenced-by";
 }
 
 interface TextMatch {
@@ -94,6 +94,7 @@ export function registerLocateCommand(program: Command): void {
         calleesResult,
         importsResult,
         importedByResult,
+        referencedByResult,
       ] = await Promise.all([
         client.entity(target.id),
         isContainer
@@ -103,6 +104,7 @@ export function registerLocateCommand(program: Command): void {
         client.expand(target.id, { direction: "out", predicates: ["CALLS"] }),
         client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] }),
         client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] }),
+        client.expand(target.id, { direction: "in", predicates: ["REFERENCES"] }),
       ]);
 
       const node = details.node as any;
@@ -153,6 +155,9 @@ export function registerLocateCommand(program: Command): void {
       }
       for (const n of importedByResult.nodes) {
         relationships.push(nodeToRelated(n, "imported-by"));
+      }
+      for (const n of referencedByResult.nodes) {
+        relationships.push(nodeToRelated(n, "referenced-by"));
       }
 
       // If container, show contained members as relationships too

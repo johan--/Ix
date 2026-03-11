@@ -6,8 +6,8 @@ import { getEndpoint } from "../config.js";
 type Metric = "dependents" | "callers" | "importers" | "members";
 
 const METRIC_CONFIG: Record<Metric, { direction: string; predicates: string[] }> = {
-  dependents: { direction: "in", predicates: ["CALLS", "IMPORTS"] },
-  callers: { direction: "in", predicates: ["CALLS"] },
+  dependents: { direction: "in", predicates: ["CALLS", "IMPORTS", "REFERENCES"] },
+  callers: { direction: "in", predicates: ["CALLS", "REFERENCES"] },
   importers: { direction: "in", predicates: ["IMPORTS"] },
   members: { direction: "out", predicates: ["CONTAINS"] },
 };

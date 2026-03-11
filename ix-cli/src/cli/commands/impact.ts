@@ -55,7 +55,7 @@ async function containerImpact(
   const [containsResult, importersResult, dependentsResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
     client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] }),
     client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] }),
-    client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
@@ -83,7 +83,7 @@ async function containerImpact(
     try {
       const callersResult = await client.expand(member.id, {
         direction: "in",
-        predicates: ["CALLS"],
+        predicates: ["CALLS", "REFERENCES"],
       });
       return {
         name: member.name || member.attrs?.name || "(unnamed)",
@@ -194,8 +194,8 @@ async function leafImpact(
 ): Promise<void> {
   // Fetch callers, callees, and developer-cycle context in parallel
   const [callersResult, calleesResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
-    client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
-    client.expand(target.id, { direction: "out", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] }),
+    client.expand(target.id, { direction: "out", predicates: ["CALLS", "REFERENCES"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),

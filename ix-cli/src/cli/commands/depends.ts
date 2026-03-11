@@ -12,8 +12,8 @@ export interface DependencyNode {
   name: string;
   kind: string;
   resolved: boolean;
-  relation: "called_by" | "imported_by";
-  sourceEdge: "CALLS" | "IMPORTS";
+  relation: "called_by" | "imported_by" | "referenced_by";
+  sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES";
   path?: string;
   children: DependencyNode[];
   cycle?: boolean;
@@ -46,14 +46,15 @@ export async function buildDependencyTree(
 
     maxDepthReached = Math.max(maxDepthReached, depth);
 
-    const [callResult, importResult] = await Promise.all([
+    const [callResult, importResult, refResult] = await Promise.all([
       client.expand(nodeId, { direction: "in", predicates: ["CALLS"], hops: 1 }),
       client.expand(nodeId, { direction: "in", predicates: ["IMPORTS"], hops: 1 }),
+      client.expand(nodeId, { direction: "in", predicates: ["REFERENCES"], hops: 1 }),
     ]);
 
     const children: DependencyNode[] = [];
 
-    const processNodes = async (nodes: any[], relation: "called_by" | "imported_by", sourceEdge: "CALLS" | "IMPORTS") => {
+    const processNodes = async (nodes: any[], relation: "called_by" | "imported_by" | "referenced_by", sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES") => {
       for (const n of nodes) {
         if (nodesVisited >= maxNodes) { truncated = true; break; }
         const name = n.name || n.attrs?.name || "";
@@ -85,6 +86,7 @@ export async function buildDependencyTree(
 
     await processNodes(callResult.nodes, "called_by", "CALLS");
     await processNodes(importResult.nodes, "imported_by", "IMPORTS");
+    await processNodes(refResult.nodes, "referenced_by", "REFERENCES");
 
     return children;
   }

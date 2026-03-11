@@ -29,7 +29,7 @@ export function registerCallersCommand(program: Command): void {
       // Use expandByName for cross-file resolution
       const result = await client.expandByName(target.name, {
         direction: "in",
-        predicates: ["CALLS"],
+        predicates: ["CALLS", "REFERENCES"],
         kinds: ["function", "method"],
       });
 
@@ -76,11 +76,11 @@ export function registerCallersCommand(program: Command): void {
                 },
                 diagnostics: [{
                   code: "text_fallback_used",
-                  message: "No graph-backed CALLS edges found. If files were ingested before CALLS extraction was added, run: ix ingest --force --recursive .",
+                  message: "No graph-backed CALLS/REFERENCES edges found. If files were ingested before extraction was added, run: ix ingest --force --recursive .",
                 }],
               }, null, 2));
             } else {
-              stderr(chalk.dim("No graph-backed CALLS edges found. Showing text-based candidate usages."));
+              stderr(chalk.dim("No graph-backed CALLS/REFERENCES edges found. Showing text-based candidate usages."));
               stderr(chalk.dim("Tip: if files were ingested before CALLS extraction, run: ix ingest --force --recursive .\n"));
               for (const r of textResults) {
                 const snippet = r.attrs?.snippet ?? "";

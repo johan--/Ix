@@ -85,7 +85,7 @@ async function overviewContainer(
     client.entity(target.id),
     client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] }),
     client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] }),
-    client.expand(target.id, { direction: "in", predicates: ["CALLS", "IMPORTS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "IMPORTS", "REFERENCES"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
@@ -134,7 +134,7 @@ async function overviewContainer(
         try {
           const callersResult = await client.expand(m.id, {
             direction: "in",
-            predicates: ["CALLS"],
+            predicates: ["CALLS", "REFERENCES"],
           });
           return callersResult.nodes.length;
         } catch {
@@ -225,8 +225,8 @@ async function overviewCallable(
   // Fetch entity details, callers, and callees in parallel
   const [details, callersResult, calleesResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
     client.entity(target.id),
-    client.expand(target.id, { direction: "in", predicates: ["CALLS"] }),
-    client.expand(target.id, { direction: "out", predicates: ["CALLS"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] }),
+    client.expand(target.id, { direction: "out", predicates: ["CALLS", "REFERENCES"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
@@ -260,7 +260,7 @@ async function overviewCallable(
   const callees = calleesResult.nodes;
 
   if (callers.length === 0 && callees.length === 0) {
-    diagnostics.push("No CALLS edges found. If files were ingested before CALLS extraction, run: ix ingest --force --recursive .");
+    diagnostics.push("No CALLS/REFERENCES edges found. If files were ingested before extraction was added, run: ix ingest --force --recursive .");
   }
 
   const decisions = decisionsResult.nodes.map((n: any) => ({
