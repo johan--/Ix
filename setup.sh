@@ -47,45 +47,9 @@ ensure_local_bin_on_path() {
 }
 
 install_claude_hooks() {
-  local settings="$HOME/.claude/settings.json"
-  local intercept="$IX_DIR/ix-plugin/hooks/ix-intercept.sh"
-  local ingest="$IX_DIR/ix-plugin/hooks/ix-ingest.sh"
-
-  chmod +x "$intercept" "$ingest"
-
-  mkdir -p "$HOME/.claude"
-  [ -f "$settings" ] || echo "{}" > "$settings"
-
-  # Merge hooks into existing settings without clobbering other keys.
-  # If the ix hooks are already present (matched by command path), skip.
-  local already
-  already=$(jq --arg cmd "$intercept" \
-    '[.hooks?.PreToolUse[]?.hooks[]?.command? // empty] | map(select(. == $cmd)) | length' \
-    "$settings" 2>/dev/null || echo "0")
-
-  if [ "$already" -gt 0 ]; then
-    echo "  [ok] Claude Code hooks already configured — skipping"
-    return
-  fi
-
-  local tmp
-  tmp=$(mktemp)
-  jq --arg intercept "$intercept" --arg ingest "$ingest" '
-    .hooks |= (. // {}) |
-    .hooks.PreToolUse |= (. // []) |
-    .hooks.PreToolUse += [{
-      "matcher": "Grep|Glob",
-      "hooks": [{ "type": "command", "command": $intercept, "timeout": 10 }]
-    }] |
-    .hooks.PostToolUse |= (. // []) |
-    .hooks.PostToolUse += [{
-      "matcher": "Write|Edit|MultiEdit",
-      "hooks": [{ "type": "command", "command": $ingest, "timeout": 30 }]
-    }]
-  ' "$settings" > "$tmp" && mv "$tmp" "$settings"
-
-  echo "  [ok] Claude Code hooks installed → ~/.claude/settings.json"
-  echo "       Restart Claude Code to activate."
+  # Delegate to the standalone installer — keeps curl and repo installs in sync.
+  # Hooks are copied to ~/.local/share/ix/plugin/hooks (not repo-relative).
+  bash "$IX_DIR/ix-plugin/install.sh"
 }
 
 install_global_ix() {

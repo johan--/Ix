@@ -17,15 +17,24 @@ TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 # Bail silently if ix is not in PATH
 command -v ix >/dev/null 2>&1 || exit 0
 
-# Bail silently if ix backend is not reachable
-ix status >/dev/null 2>&1 || exit 0
+# ── Health check with 30s TTL cache ─────────────────────────────────────────
+IX_HEALTH_CACHE="${TMPDIR:-/tmp}/ix-healthy"
+_now=$(date +%s)
+_cache_ok=0
+if [ -f "$IX_HEALTH_CACHE" ]; then
+  _cached=$(cat "$IX_HEALTH_CACHE" 2>/dev/null || echo 0)
+  (( (_now - _cached) < 30 )) && _cache_ok=1
+fi
+if [ "$_cache_ok" -eq 0 ]; then
+  ix status >/dev/null 2>&1 || exit 0
+  echo "$_now" > "$IX_HEALTH_CACHE"
+fi
 
 # ── Grep: text/symbol search ─────────────────────────────────────────────────
 if [ "$TOOL" = "Grep" ]; then
   PATTERN=$(echo "$INPUT" | jq -r '.tool_input.pattern // empty')
   [ -z "$PATTERN" ] && exit 0
 
-  # Run ix text search (line-level matches, respects --language and --path)
   PATH_ARG=$(echo "$INPUT" | jq -r '.tool_input.path // empty')
   LANG_ARG=$(echo "$INPUT" | jq -r '.tool_input.type // empty')
 
@@ -33,10 +42,21 @@ if [ "$TOOL" = "Grep" ]; then
   [ -n "$PATH_ARG" ] && TEXT_ARGS+=("--path" "$PATH_ARG")
   [ -n "$LANG_ARG" ] && TEXT_ARGS+=("--language" "$LANG_ARG")
 
-  TEXT_RESULT=$(ix text "${TEXT_ARGS[@]}" 2>/dev/null) || TEXT_RESULT=""
+  # Run ix text and ix locate in parallel
+  _text_tmp=$(mktemp)
+  _locate_tmp=$(mktemp)
+  trap 'rm -f "$_text_tmp" "$_locate_tmp"' EXIT
 
-  # Also run ix locate for symbol-level matches (class, function, etc.)
-  LOCATE_RESULT=$(ix locate "$PATTERN" --limit 10 --format json 2>/dev/null) || LOCATE_RESULT=""
+  ix text "${TEXT_ARGS[@]}" > "$_text_tmp" 2>/dev/null &
+  _text_pid=$!
+  ix locate "$PATTERN" --limit 10 --format json > "$_locate_tmp" 2>/dev/null &
+  _locate_pid=$!
+
+  wait "$_text_pid" || true
+  wait "$_locate_pid" || true
+
+  TEXT_RESULT=$(cat "$_text_tmp")
+  LOCATE_RESULT=$(cat "$_locate_tmp")
 
   [ -z "$TEXT_RESULT" ] && [ -z "$LOCATE_RESULT" ] && exit 0
 

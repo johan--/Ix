@@ -16,6 +16,7 @@ trait GraphQueryApi {
              predicates: Option[Set[String]] = None, hops: Int = 1,
              asOfRev: Option[Rev] = None): IO[ExpandResult]
   def getClaims(entityId: NodeId): IO[Vector[Claim]]
+  def getClaimsBatch(entityIds: Seq[NodeId]): IO[Vector[Claim]]
   def getLatestRev: IO[Rev]
   def getPatchesForEntity(entityId: NodeId): IO[List[Json]]
   def getPatchesBySource(sourceUri: String, extractor: String): IO[Vector[Json]]

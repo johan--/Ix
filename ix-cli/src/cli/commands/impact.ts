@@ -12,7 +12,7 @@ export function registerImpactCommand(program: Command): void {
     .description("Aggregated impact analysis — who depends on this symbol and its members")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
-    .option("--depth <n>", "Expansion depth (reserved for future use)", "1")
+    .option("--depth <n>", "Expansion depth for callers/importers (default 1, max 3)", "1")
     .option("--limit <n>", "Max top-impacted members to show", "10")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText(
@@ -26,6 +26,7 @@ export function registerImpactCommand(program: Command): void {
       ) => {
         const client = new IxClient(getEndpoint());
         const limit = parseInt(opts.limit, 10);
+        const depth = Math.min(Math.max(parseInt(opts.depth, 10) || 1, 1), 3);
         const isJson = opts.format === "json";
 
         const resolveOpts = { kind: opts.kind, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
@@ -35,9 +36,9 @@ export function registerImpactCommand(program: Command): void {
         if (!isJson) printResolved(target);
 
         if (CONTAINER_KINDS.has(target.kind)) {
-          await containerImpact(client, target, limit, isJson);
+          await containerImpact(client, target, limit, depth, isJson);
         } else {
-          await leafImpact(client, target, isJson);
+          await leafImpact(client, target, depth, isJson);
         }
       }
     );
@@ -47,6 +48,7 @@ async function containerImpact(
   client: IxClient,
   target: { id: string; kind: string; name: string; resolutionMode: string },
   limit: number,
+  depth: number,
   isJson: boolean
 ): Promise<void> {
   const diagnostics: string[] = [];
@@ -54,8 +56,8 @@ async function containerImpact(
   // 1. Get contained members, importers, dependents, and developer-cycle context in parallel
   const [containsResult, importersResult, dependentsResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
     client.expand(target.id, { direction: "out", predicates: ["CONTAINS"] }),
-    client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] }),
-    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] }),
+    client.expand(target.id, { direction: "in", predicates: ["IMPORTS"], hops: depth }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"], hops: depth }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["BUG_AFFECTS"] }),
@@ -119,6 +121,7 @@ async function containerImpact(
           resolvedTarget: { id: target.id, kind: target.kind, name: target.name },
           resolutionMode: target.resolutionMode,
           resultSource: "graph",
+          depth,
           summary: {
             members: members.length,
             callers: 0,
@@ -140,11 +143,12 @@ async function containerImpact(
       )
     );
   } else {
+    const depthNote = depth > 1 ? chalk.dim(` (depth ${depth})`) : "";
     console.log(chalk.bold(`Target: ${target.kind} ${target.name}\n`));
-    console.log(chalk.bold("Impact summary:"));
+    console.log(chalk.bold("Impact summary:") + depthNote);
     console.log(`  members:              ${members.length}`);
-    console.log(`  direct importers:     ${directImporters.length}`);
-    console.log(`  direct dependents:    ${directDependents.length}`);
+    console.log(`  importers:            ${directImporters.length}`);
+    console.log(`  dependents:           ${directDependents.length}`);
     console.log(`  member-level callers: ${totalMemberCallers}`);
 
     if (topMembers.length > 0) {
@@ -190,11 +194,12 @@ async function containerImpact(
 async function leafImpact(
   client: IxClient,
   target: { id: string; kind: string; name: string; resolutionMode: string },
+  depth: number,
   isJson: boolean
 ): Promise<void> {
   // Fetch callers, callees, and developer-cycle context in parallel
   const [callersResult, calleesResult, decisionsResult, tasksResult, bugsResult] = await Promise.all([
-    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"] }),
+    client.expand(target.id, { direction: "in", predicates: ["CALLS", "REFERENCES"], hops: depth }),
     client.expand(target.id, { direction: "out", predicates: ["CALLS", "REFERENCES"] }),
     client.expand(target.id, { direction: "in", predicates: ["DECISION_AFFECTS"] }),
     client.expand(target.id, { direction: "in", predicates: ["TASK_AFFECTS"] }),
@@ -218,6 +223,7 @@ async function leafImpact(
           resolvedTarget: { id: target.id, kind: target.kind, name: target.name },
           resolutionMode: target.resolutionMode,
           resultSource: "graph",
+          depth,
           summary: {
             members: 0,
             callers: callersResult.nodes.length,
@@ -247,8 +253,9 @@ async function leafImpact(
       )
     );
   } else {
+    const depthNote = depth > 1 ? chalk.dim(` (depth ${depth})`) : "";
     console.log(chalk.bold(`Target: ${target.kind} ${target.name}\n`));
-    console.log(chalk.bold("Impact summary:"));
+    console.log(chalk.bold("Impact summary:") + depthNote);
     console.log(`  callers: ${callersResult.nodes.length}`);
     console.log(`  callees: ${calleesResult.nodes.length}`);
 

@@ -282,6 +282,20 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       )
     ).map(_.flatMap(parseClaim).toVector)
 
+  override def getClaimsBatch(entityIds: Seq[NodeId]): IO[Vector[Claim]] =
+    if (entityIds.isEmpty) IO.pure(Vector.empty)
+    else {
+      val idList = new java.util.ArrayList[String](entityIds.size)
+      entityIds.foreach(id => idList.add(id.value.toString))
+      client.query(
+        """FOR c IN claims
+          |  FILTER c.entity_id IN @ids
+          |    AND c.deleted_rev == null
+          |  RETURN c""".stripMargin,
+        Map("ids" -> idList.asInstanceOf[AnyRef])
+      ).map(_.flatMap(parseClaim).toVector)
+    }
+
   override def getLatestRev: IO[Rev] =
     client.queryOne(
       """FOR r IN revisions
@@ -320,25 +334,45 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
     ).map(_.toVector)
 
   override def getChangedEntities(fromRev: Rev, toRev: Rev): IO[Vector[(GraphNode, Option[GraphNode])]] = {
-    val changedIdsAql = """
+    val aql = """
       FOR n IN nodes
         FILTER n.created_rev > @fromRev AND n.created_rev <= @toRev
         COLLECT logicalId = n.logical_id
-        RETURN logicalId
+        LET atFrom = FIRST(
+          FOR x IN nodes
+            FILTER x.logical_id == logicalId
+              AND x.created_rev <= @fromRev
+              AND (x.deleted_rev == null OR @fromRev < x.deleted_rev)
+            SORT x.created_rev DESC
+            LIMIT 1
+            RETURN x
+        )
+        LET atTo = FIRST(
+          FOR x IN nodes
+            FILTER x.logical_id == logicalId
+              AND x.created_rev <= @toRev
+              AND (x.deleted_rev == null OR @toRev < x.deleted_rev)
+            SORT x.created_rev DESC
+            LIMIT 1
+            RETURN x
+        )
+        FILTER atTo != null
+        RETURN { atFrom: atFrom, atTo: atTo }
     """
-    for {
-      logicalIds <- client.query(changedIdsAql, Map(
-        "fromRev" -> Long.box(fromRev.value).asInstanceOf[AnyRef],
-        "toRev"   -> Long.box(toRev.value).asInstanceOf[AnyRef]
-      )).map(_.flatMap(_.asString).toVector)
-      results <- logicalIds.traverse { lid =>
-        val nodeId = NodeId(java.util.UUID.fromString(lid))
+    client.query(aql, Map(
+      "fromRev" -> Long.box(fromRev.value).asInstanceOf[AnyRef],
+      "toRev"   -> Long.box(toRev.value).asInstanceOf[AnyRef]
+    )).map { results =>
+      results.flatMap { json =>
+        val c = json.hcursor
         for {
-          atFrom <- getNode(nodeId, asOfRev = Some(fromRev))
-          atTo   <- getNode(nodeId, asOfRev = Some(toRev))
-        } yield atTo.map(to => (to, atFrom))
-      }
-    } yield results.flatten
+          atTo <- c.downField("atTo").focus.flatMap(parseNode)
+        } yield {
+          val atFrom = c.downField("atFrom").focus.flatMap(parseNode)
+          (atTo, atFrom)
+        }
+      }.toVector
+    }
   }
 
   override def getDiffSummary(fromRev: Rev, toRev: Rev): IO[Map[String, Int]] = {
@@ -434,7 +468,8 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       case Direction.Both => "FILTER e.src IN target_ids OR e.dst IN target_ids"
     }
 
-    val aql =
+    // Phase 1: fetch edges only (no correlated node subquery per row)
+    val edgeAql =
       s"""LET target_ids = (
          |  FOR n IN nodes
          |    FILTER n.name == @name AND n.deleted_rev == null
@@ -445,16 +480,7 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
          |  FILTER e.deleted_rev == null
          |  $directionFilter
          |  $predicateFilter
-         |  LET other_id = (e.src IN target_ids ? e.dst : e.src)
-         |  LET other = FIRST(
-         |    FOR n IN nodes
-         |      FILTER n.logical_id == other_id AND n.deleted_rev == null
-         |      SORT n.created_rev DESC
-         |      LIMIT 1
-         |      RETURN n
-         |  )
-         |  FILTER other != null
-         |  RETURN { edge: e, node: other }""".stripMargin
+         |  RETURN MERGE(e, { _target_ids: target_ids })""".stripMargin
 
     val binds = scala.collection.mutable.Map[String, AnyRef](
       "name" -> name.asInstanceOf[AnyRef]
@@ -470,15 +496,36 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
       binds += ("predicates" -> predList.asInstanceOf[AnyRef])
     }
 
-    client.query(aql, binds.toMap).map { results =>
-      val edges = results.flatMap { json =>
-        json.hcursor.downField("edge").focus.flatMap(parseEdge)
-      }.toVector
-      val nodes = results.flatMap { json =>
-        json.hcursor.downField("node").focus.flatMap(parseNode)
-      }.toVector
-      ExpandResult(nodes, edges)
-    }
+    for {
+      edgeRows  <- client.query(edgeAql, binds.toMap)
+      allEdges   = edgeRows.flatMap(parseEdge).toVector
+
+      // Determine which side is the "other" node by checking if src was a target
+      targetIdSet: Set[String] = edgeRows.headOption
+        .flatMap(_.hcursor.downField("_target_ids").as[List[String]].toOption)
+        .getOrElse(Nil).toSet
+
+      neighborIds = allEdges.flatMap { e =>
+        if (targetIdSet.contains(e.src.value.toString)) Vector(e.dst)
+        else if (targetIdSet.contains(e.dst.value.toString)) Vector(e.src)
+        else Vector(e.src, e.dst)
+      }.distinct
+
+      // Phase 2: batch-fetch all neighbor nodes in one query
+      nodes <- if (neighborIds.isEmpty) IO.pure(Vector.empty[GraphNode])
+               else {
+                 val idList = new java.util.ArrayList[String](neighborIds.size)
+                 neighborIds.foreach(nid => idList.add(nid.value.toString))
+                 client.query(
+                   """FOR n IN nodes
+                     |  FILTER n.logical_id IN @ids AND n.deleted_rev == null
+                     |  SORT n.logical_id, n.created_rev DESC
+                     |  COLLECT lid = n.logical_id INTO grp
+                     |  RETURN FIRST(grp).n""".stripMargin,
+                   Map("ids" -> idList.asInstanceOf[AnyRef])
+                 ).map(_.flatMap(parseNode).toVector)
+               }
+    } yield ExpandResult(nodes, allEdges)
   }
 
   // ── JSON Parsers (snake_case → camelCase) ───────────────────────────
