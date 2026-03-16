@@ -8,6 +8,7 @@ import type { GraphPatchPayload } from '../../client/types.js';
 import { getEndpoint, resolveWorkspaceRoot } from '../config.js';
 import { resolveGitHubToken } from '../github/auth.js';
 import { parseGitHubRepo, fetchGitHubData } from '../github/fetch.js';
+import { loadIngestionModules } from './ingestion-loader.js';
 import {
   deterministicId,
   transformIssue,
@@ -16,10 +17,6 @@ import {
   transformPRComment,
   transformCommit,
 } from '../github/transform.js';
-import { parseFile } from '../../parser/index.js';
-import { buildPatch } from '../../parser/patch-builder.js';
-import { languageFromPath } from '../../parser/languages.js';
-
 // ---------------------------------------------------------------------------
 // File discovery
 // ---------------------------------------------------------------------------
@@ -31,7 +28,11 @@ const IGNORE_DIRS = new Set([
 
 const MAX_FILE_BYTES = 1024 * 1024; // 1 MB
 
-function* walkFiles(dir: string, recursive: boolean): Generator<string> {
+function* walkFiles(
+  dir: string,
+  recursive: boolean,
+  supportsFile: (fileName: string) => boolean
+): Generator<string> {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
   catch { return; }
@@ -40,9 +41,9 @@ function* walkFiles(dir: string, recursive: boolean): Generator<string> {
     if (IGNORE_DIRS.has(entry.name)) continue;
     const full = nodePath.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (recursive) yield* walkFiles(full, true);
+      if (recursive) yield* walkFiles(full, true, supportsFile);
     } else if (entry.isFile()) {
-      if (languageFromPath(entry.name) !== null) yield full;
+      if (supportsFile(entry.name)) yield full;
     }
   }
 }
@@ -93,6 +94,7 @@ async function ingestFiles(
   path: string,
   opts: { recursive?: boolean; force?: boolean; format: string; root?: string }
 ): Promise<void> {
+  const [{ parseFile, resolveCallEdges, isGrammarSupported }, { buildPatchWithResolution }] = await loadIngestionModules();
   const resolvedPath = nodePath.isAbsolute(path)
     ? path
     : nodePath.resolve(resolveWorkspaceRoot(opts.root), path);
@@ -113,18 +115,23 @@ async function ingestFiles(
   let parseErrors = 0;
   let tooLarge = 0;
   let latestRev = 0;
+  let entitiesParsed = 0;
 
   try {
     // Collect files
     const stat = fs.statSync(resolvedPath);
     const filePaths: string[] = stat.isFile()
       ? [resolvedPath]
-      : Array.from(walkFiles(resolvedPath, opts.recursive ?? false));
+      : Array.from(walkFiles(resolvedPath, opts.recursive ?? false, isGrammarSupported));
 
     filesDiscovered = filePaths.length;
 
     // Load existing source hashes for change detection (unless --force)
     const knownHashes = opts.force ? new Map<string, string>() : await loadExistingHashes(client, filePaths);
+
+    // Phase 1: parse all files
+    type ParsedFile = { filePath: string; parsed: any; hash: string; previousHash: string | undefined };
+    const parsedFiles: ParsedFile[] = [];
 
     for (const filePath of filePaths) {
       try {
@@ -144,12 +151,25 @@ async function ingestFiles(
         const parsed = parseFile(filePath, source);
 
         if (!parsed) {
-          // Unsupported file type — skip silently
           filesSkipped++;
           continue;
         }
 
-        const patch = buildPatch(parsed, hash);
+        entitiesParsed += parsed.entities.length;
+        const previousHash = knownHashes.get(filePath);
+        parsedFiles.push({ filePath, parsed, hash, previousHash: previousHash !== hash ? previousHash : undefined });
+      } catch {
+        parseErrors++;
+      }
+    }
+
+    // Phase 2: cross-file CALLS resolution over the full batch
+    const resolvedEdges = resolveCallEdges(parsedFiles.map(f => f.parsed));
+
+    // Phase 3: build and commit patches
+    for (const { parsed, hash, previousHash } of parsedFiles) {
+      try {
+        const patch = buildPatchWithResolution(parsed, hash, resolvedEdges, previousHash);
         const result = await client.commitPatch(patch);
         if (result.rev > latestRev) latestRev = result.rev;
         patchesApplied++;
@@ -171,7 +191,7 @@ async function ingestFiles(
       filesProcessed: filesDiscovered,
       patchesApplied,
       filesSkipped,
-      entitiesCreated: 0,
+      entitiesParsed,
       latestRev,
       skipReasons: { unchanged: filesSkipped, emptyFile: 0, parseError: parseErrors, tooLarge },
       elapsedSeconds: parseFloat(elapsed),

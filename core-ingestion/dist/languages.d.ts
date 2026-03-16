@@ -1,0 +1,16 @@
+export declare enum SupportedLanguages {
+    JavaScript = "javascript",
+    TypeScript = "typescript",
+    Python = "python",
+    Java = "java",
+    C = "c",
+    CPlusPlus = "cpp",
+    CSharp = "csharp",
+    Go = "go",
+    Ruby = "ruby",
+    Rust = "rust",
+    PHP = "php",
+    Kotlin = "kotlin",
+    Swift = "swift"
+}
+export declare function languageFromPath(filePath: string): SupportedLanguages | null;
