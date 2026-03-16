@@ -13,6 +13,7 @@ export var SupportedLanguages;
     SupportedLanguages["PHP"] = "php";
     SupportedLanguages["Kotlin"] = "kotlin";
     SupportedLanguages["Swift"] = "swift";
+    SupportedLanguages["Scala"] = "scala";
 })(SupportedLanguages || (SupportedLanguages = {}));
 const EXT_MAP = {
     '.ts': SupportedLanguages.TypeScript,
@@ -37,6 +38,8 @@ const EXT_MAP = {
     '.kt': SupportedLanguages.Kotlin,
     '.kts': SupportedLanguages.Kotlin,
     '.swift': SupportedLanguages.Swift,
+    '.scala': SupportedLanguages.Scala,
+    '.sc': SupportedLanguages.Scala,
 };
 export function languageFromPath(filePath) {
     const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();

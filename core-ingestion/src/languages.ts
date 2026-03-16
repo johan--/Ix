@@ -12,6 +12,7 @@ export enum SupportedLanguages {
   PHP = 'php',
   Kotlin = 'kotlin',
   Swift = 'swift',
+  Scala = 'scala',
 }
 
 const EXT_MAP: Record<string, SupportedLanguages> = {
@@ -37,6 +38,8 @@ const EXT_MAP: Record<string, SupportedLanguages> = {
   '.kt':   SupportedLanguages.Kotlin,
   '.kts':  SupportedLanguages.Kotlin,
   '.swift':SupportedLanguages.Swift,
+  '.scala':SupportedLanguages.Scala,
+  '.sc':   SupportedLanguages.Scala,
 };
 
 export function languageFromPath(filePath: string): SupportedLanguages | null {

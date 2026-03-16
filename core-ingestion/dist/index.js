@@ -23,6 +23,8 @@ import Rust from 'tree-sitter-rust';
 import Ruby from 'tree-sitter-ruby';
 // @ts-ignore
 import PHP from 'tree-sitter-php';
+// @ts-ignore
+import Scala from 'tree-sitter-scala';
 import { SupportedLanguages, languageFromPath } from './languages.js';
 import { LANGUAGE_QUERIES } from './queries.js';
 // ---------------------------------------------------------------------------
@@ -40,6 +42,7 @@ const GRAMMAR_MAP = {
     [SupportedLanguages.Rust]: Rust,
     [SupportedLanguages.Ruby]: Ruby,
     [SupportedLanguages.PHP]: PHP.php_only,
+    [SupportedLanguages.Scala]: Scala,
 };
 // Capture key prefix → NodeKind string
 const DEFINITION_KIND_MAP = {

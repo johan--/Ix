@@ -11,6 +11,7 @@ export declare enum SupportedLanguages {
     Rust = "rust",
     PHP = "php",
     Kotlin = "kotlin",
-    Swift = "swift"
+    Swift = "swift",
+    Scala = "scala"
 }
 export declare function languageFromPath(filePath: string): SupportedLanguages | null;

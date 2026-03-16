@@ -701,6 +701,71 @@ export const SWIFT_QUERIES = `
   (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.extends))) @heritage
 `;
 
+// Scala queries - works with tree-sitter-scala
+export const SCALA_QUERIES = `
+; ── Classes (class, case class, abstract class, sealed class) ────────────────
+(class_definition
+  name: (identifier) @name) @definition.class
+
+; ── Traits (mapped to interface) ─────────────────────────────────────────────
+(trait_definition
+  name: (identifier) @name) @definition.interface
+
+; ── Object definitions (companion objects, case objects, singletons) ─────────
+(object_definition
+  name: (identifier) @name) @definition.class
+
+; ── Function / method definitions ────────────────────────────────────────────
+(function_definition
+  name: (identifier) @name) @definition.function
+
+; ── Abstract method declarations (in traits / abstract classes) ──────────────
+(function_declaration
+  name: (identifier) @name) @definition.method
+
+; ── Type aliases ──────────────────────────────────────────────────────────────
+(type_definition
+  name: (type_identifier) @name) @definition.type
+
+; ── Imports: simple path segments (import a.b.C → captures a, b, C) ─────────
+(import_declaration
+  (identifier) @import.source) @import
+
+; ── Imports: selective { X, Y } (import a.b.{C, D}) ─────────────────────────
+(import_declaration
+  (namespace_selectors
+    (identifier) @import.source)) @import
+
+; ── Calls: direct function call ──────────────────────────────────────────────
+(call_expression
+  function: (identifier) @call.name) @call
+
+; ── Calls: method call (obj.method()) ────────────────────────────────────────
+(call_expression
+  function: (field_expression
+    field: (identifier) @call.name)) @call
+
+; ── Constructor: new Foo() ────────────────────────────────────────────────────
+(instance_expression
+  (type_identifier) @call.name) @call
+
+; ── Heritage: class / object extends and with ────────────────────────────────
+(class_definition
+  name: (identifier) @heritage.class
+  extend: (extends_clause
+    (type_identifier) @heritage.extends)) @heritage
+
+(trait_definition
+  name: (identifier) @heritage.class
+  extend: (extends_clause
+    (type_identifier) @heritage.extends)) @heritage
+
+(object_definition
+  name: (identifier) @heritage.class
+  extend: (extends_clause
+    (type_identifier) @heritage.extends)) @heritage
+`;
+
 export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.TypeScript]: TYPESCRIPT_QUERIES,
   [SupportedLanguages.JavaScript]: JAVASCRIPT_QUERIES,
@@ -715,5 +780,6 @@ export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.PHP]: PHP_QUERIES,
   [SupportedLanguages.Kotlin]: KOTLIN_QUERIES,
   [SupportedLanguages.Swift]: SWIFT_QUERIES,
+  [SupportedLanguages.Scala]: SCALA_QUERIES,
 };
  
