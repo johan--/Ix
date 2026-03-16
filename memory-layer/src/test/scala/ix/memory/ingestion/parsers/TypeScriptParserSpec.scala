@@ -7,7 +7,7 @@ import ix.memory.model.NodeKind
 import io.circe.Json
 
 class TypeScriptParserSpec extends AnyFlatSpec with Matchers {
-  val parser = new TypeScriptParser()
+  val parser: ix.memory.ingestion.Parser = new TreeSitterTypeScriptParser()
 
   val sampleCode: String = scala.io.Source.fromResource("fixtures/api.ts").mkString
 
@@ -582,5 +582,49 @@ class TypeScriptParserSpec extends AnyFlatSpec with Matchers {
       m.lineStart should be >= cls.lineStart
       m.lineEnd should be <= cls.lineEnd
     }
+  }
+
+  // --- Tree-sitter specific tests ---
+
+  it should "extract default imports" in {
+    val source = """import React from 'react';"""
+    val result = parser.parse("app.tsx", source)
+    val imports = result.relationships.filter(_.predicate == "IMPORTS")
+    imports.map(_.dstName) should contain ("React")
+    imports.map(_.dstName) should contain ("react")
+  }
+
+  it should "extract namespace imports" in {
+    val source = """import * as path from 'path';"""
+    val result = parser.parse("util.ts", source)
+    val imports = result.relationships.filter(_.predicate == "IMPORTS")
+    imports.map(_.dstName) should contain ("path")
+  }
+
+  it should "handle arrow function with object type param" in {
+    val source = """
+      |const fn = (opts: { a: string; b: number }) => {
+      |  return processOpts(opts);
+      |};
+    """.stripMargin
+    val result = parser.parse("fn.ts", source)
+    val func = result.entities.find(e => e.name == "fn" && e.kind == NodeKind.Function)
+    func shouldBe defined
+    result.relationships.exists(r =>
+      r.srcName == "fn" && r.dstName == "processOpts" && r.predicate == "CALLS"
+    ) shouldBe true
+  }
+
+  it should "extract enum declarations" in {
+    val source = """
+      |export enum Status {
+      |  Active,
+      |  Inactive
+      |}
+    """.stripMargin
+    val result = parser.parse("status.ts", source)
+    val enum = result.entities.find(_.name == "Status")
+    enum shouldBe defined
+    enum.get.attrs.get("ts_kind").flatMap(_.asString) shouldBe Some("enum")
   }
 }

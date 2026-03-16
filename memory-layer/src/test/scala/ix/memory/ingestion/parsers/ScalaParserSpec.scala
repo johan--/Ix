@@ -7,7 +7,7 @@ import ix.memory.model.NodeKind
 import io.circe.Json
 
 class ScalaParserSpec extends AnyFlatSpec with Matchers {
-  val parser = new ScalaParser
+  val parser: ix.memory.ingestion.Parser = new TreeSitterScalaParser
 
   val sampleCode: String =
     """package ix.memory.context
@@ -296,5 +296,50 @@ class ScalaParserSpec extends AnyFlatSpec with Matchers {
     val computeBase = result.entities.find(_.name == "computeBase").get
     computeBase.lineStart should be > 1
     computeBase.lineEnd should be > computeBase.lineStart
+  }
+
+  // --- Tree-sitter specific tests ---
+
+  it should "handle 3+ level nesting with full CONTAINS chain" in {
+    val source = """object A {
+      |  object B {
+      |    class C {
+      |      def d(): Unit = ()
+      |    }
+      |  }
+      |}""".stripMargin
+    val result = parser.parse("Nested.scala", source)
+    val contains = result.relationships.filter(_.predicate == "CONTAINS")
+    contains should contain (ParsedRelationship("Nested.scala", "A", "CONTAINS"))
+    contains should contain (ParsedRelationship("A", "B", "CONTAINS"))
+    contains should contain (ParsedRelationship("B", "C", "CONTAINS"))
+    contains should contain (ParsedRelationship("C", "d", "CONTAINS"))
+  }
+
+  it should "handle multi-line function signatures" in {
+    val source = """class Service {
+      |  def process(
+      |    x: Int,
+      |    y: String
+      |  ): IO[Unit] = {
+      |    println(x)
+      |  }
+      |}""".stripMargin
+    val result = parser.parse("Service.scala", source)
+    val method = result.entities.find(_.name == "process").get
+    method.kind shouldBe NodeKind.Method
+    method.lineStart should be >= 1
+    method.lineEnd should be > method.lineStart
+  }
+
+  it should "extract EXTENDS with 'with' mixin — primary parent" in {
+    val source = """class A extends B with C with D {
+      |  def run(): Unit = ()
+      |}""".stripMargin
+    val result = parser.parse("A.scala", source)
+    val extends_ = result.relationships.filter(_.predicate == "EXTENDS")
+    extends_ should have length 1
+    extends_.head.srcName shouldBe "A"
+    extends_.head.dstName shouldBe "B"
   }
 }

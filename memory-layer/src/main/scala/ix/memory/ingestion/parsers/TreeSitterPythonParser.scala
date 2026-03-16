@@ -23,40 +23,11 @@ class TreeSitterPythonParser extends Parser {
    * @param source   the full source code as a string
    * @return ParseResult with entities and relationships
    */
-  def parse(fileName: String, source: String): ParseResult = {
-    // Try tree-sitter first, fall back to regex
-    tryTreeSitter(fileName, source).getOrElse(regexParse(fileName, source))
-  }
+  def parse(fileName: String, source: String): ParseResult =
+    regexParse(fileName, source)
 
   // ---------------------------------------------------------------------------
-  // Tree-sitter JNI attempt
-  // ---------------------------------------------------------------------------
-
-  private def tryTreeSitter(fileName: String, source: String): Option[ParseResult] = {
-    try {
-      val langClass = Class.forName("ch.usi.si.seart.treesitter.Language")
-      val pythonLang = langClass.getMethod("valueOf", classOf[String]).invoke(null, "PYTHON")
-
-      val parserClass = Class.forName("ch.usi.si.seart.treesitter.Parser")
-      val parser = parserClass.getMethod("getFor", langClass).invoke(null, pythonLang)
-
-      val tree = parserClass.getMethod("parse", classOf[String]).invoke(parser, source)
-      val treeClass = Class.forName("ch.usi.si.seart.treesitter.Tree")
-      val root = treeClass.getMethod("getRootNode").invoke(tree)
-
-      // If we get here, tree-sitter loaded successfully
-      // We would walk the AST here, but for now this path is not reached
-      // on platforms where the JNI library is unavailable.
-      parserClass.getMethod("close").invoke(parser)
-      treeClass.getMethod("close").invoke(tree)
-      None // TODO: implement full tree-sitter AST walking when JNI works
-    } catch {
-      case _: Throwable => None // Catches both Exception and Error (e.g. UnsatisfiedLinkError)
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Regex-based fallback parser
+  // Regex-based parser (tree-sitter-python grammar not in deps)
   // ---------------------------------------------------------------------------
 
   private val ClassPattern: Regex   = """^class\s+(\w+)""".r
