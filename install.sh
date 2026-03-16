@@ -330,8 +330,8 @@ elif ! command -v claude >/dev/null 2>&1; then
   echo "  Install Claude Code and re-run, or install hooks manually:"
   echo "    curl -fsSL ${GITHUB_RAW}/ix-plugin/install.sh | bash"
 else
-  # Download and run the hook installer
-  gcurl "${GITHUB_RAW}/ix-plugin/install.sh" | bash
+  # Download and run the hook installer, passing auth token through
+  gcurl "${GITHUB_RAW}/ix-plugin/install.sh" | GITHUB_TOKEN="${AUTH_HEADER#Authorization: token }" bash
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
