@@ -61,7 +61,7 @@ export function registerIngestCommand(program: Command): void {
     .command('ingest [path]')
     .description('Ingest source files or GitHub data into the knowledge graph')
     .option('--path <dir>', 'Path to ingest (alternative to positional argument)')
-    .option('--recursive', 'Recursively ingest directory')
+    .option('--no-recursive', 'Do not recurse into subdirectories (recursive is on by default)')
     .option('--github <owner/repo>', 'Ingest issues, PRs, and commits from a GitHub repository')
     .option('--token <pat>', 'GitHub personal access token')
     .option('--since <date>', 'Only fetch items updated after this date (ISO 8601)')
@@ -69,7 +69,7 @@ export function registerIngestCommand(program: Command): void {
     .option('--force', 'Force re-ingest even if files are unchanged (useful after parser upgrades)')
     .option('--format <fmt>', 'Output format (text|json)', 'text')
     .option('--root <dir>', 'Workspace root directory')
-    .addHelpText('after', '\nExamples:\n  ix ingest ./src --recursive\n  ix ingest --path ./src --recursive --force\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx')
+    .addHelpText('after', '\nExamples:\n  ix ingest ./src\n  ix ingest --path ./src --force\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx')
     .action(async (positionalPath: string | undefined, opts: {
       path?: string; recursive?: boolean; force?: boolean; github?: string; token?: string;
       since?: string; limit: string; format: string; root?: string;
@@ -122,7 +122,7 @@ async function ingestFiles(
     const stat = fs.statSync(resolvedPath);
     const filePaths: string[] = stat.isFile()
       ? [resolvedPath]
-      : Array.from(walkFiles(resolvedPath, opts.recursive ?? false, isGrammarSupported));
+      : Array.from(walkFiles(resolvedPath, opts.recursive ?? true, isGrammarSupported));
 
     filesDiscovered = filePaths.length;
 
