@@ -127,12 +127,15 @@ export function registerDecideCommand(program: Command): void {
           let resolvedAffects: { id: string; kind: string; name: string }[] | undefined;
 
           if (opts.affects) {
-            const names = opts.affects.split(",").map((s) => s.trim());
+            const specs = opts.affects.split(",").map((s) => s.trim());
             resolvedAffects = [];
-            for (const name of names) {
+            for (const spec of specs) {
+              const atIdx = spec.lastIndexOf("@");
+              const name = atIdx >= 0 ? spec.slice(0, atIdx) : spec;
+              const path = atIdx >= 0 ? spec.slice(atIdx + 1) : undefined;
               const resolved = await resolveEntity(client, name, [
-                "class", "module", "file", "function", "method", "trait", "object", "interface",
-              ]);
+                "function", "method", "class", "module", "file", "trait", "object", "interface",
+              ], { path });
               if (resolved) {
                 resolvedAffects.push({ id: resolved.id, kind: resolved.kind, name: resolved.name });
               }
