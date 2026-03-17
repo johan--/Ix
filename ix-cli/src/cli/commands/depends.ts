@@ -12,8 +12,8 @@ export interface DependencyNode {
   name: string;
   kind: string;
   resolved: boolean;
-  relation: "called_by" | "imported_by" | "referenced_by";
-  sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES";
+  relation: "called_by" | "imported_by" | "referenced_by" | "extended_by" | "implemented_by";
+  sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES" | "EXTENDS" | "IMPLEMENTS";
   path?: string;
   children: DependencyNode[];
   cycle?: boolean;
@@ -46,22 +46,31 @@ export async function buildDependencyTree(
 
     maxDepthReached = Math.max(maxDepthReached, depth);
 
-    const [callResult, importResult, refResult] = await Promise.all([
+    const [callResult, importResult, refResult, extendsResult, implementsResult] = await Promise.all([
       client.expand(nodeId, { direction: "in", predicates: ["CALLS"], hops: 1 }),
       client.expand(nodeId, { direction: "in", predicates: ["IMPORTS"], hops: 1 }),
       client.expand(nodeId, { direction: "in", predicates: ["REFERENCES"], hops: 1 }),
+      client.expand(nodeId, { direction: "in", predicates: ["EXTENDS"], hops: 1 }),
+      client.expand(nodeId, { direction: "in", predicates: ["IMPLEMENTS"], hops: 1 }),
     ]);
 
     const children: DependencyNode[] = [];
+    // Track IDs added at this level to suppress same-level duplicates from
+    // multiple edge types (e.g. a node that both EXTENDS and REFERENCES the
+    // root would otherwise appear twice, the second time as a spurious cycle).
+    const levelSeen = new Set<string>();
 
-    const processNodes = async (nodes: any[], relation: "called_by" | "imported_by" | "referenced_by", sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES") => {
+    const processNodes = async (nodes: any[], relation: "called_by" | "imported_by" | "referenced_by" | "extended_by" | "implemented_by", sourceEdge: "CALLS" | "IMPORTS" | "REFERENCES" | "EXTENDS" | "IMPLEMENTS") => {
       for (const n of nodes) {
         if (nodesVisited >= maxNodes) { truncated = true; break; }
+        // Skip if already emitted at this level via a different edge type.
+        if (levelSeen.has(n.id)) continue;
         const name = n.name || n.attrs?.name || "";
         const resolved = !!name && !isRawId(name);
         const isCycle = visited.has(n.id);
 
         nodesVisited++;
+        levelSeen.add(n.id);
         visited.add(n.id);
 
         const child: DependencyNode = {
@@ -87,6 +96,8 @@ export async function buildDependencyTree(
     await processNodes(callResult.nodes, "called_by", "CALLS");
     await processNodes(importResult.nodes, "imported_by", "IMPORTS");
     await processNodes(refResult.nodes, "referenced_by", "REFERENCES");
+    await processNodes(extendsResult.nodes, "extended_by", "EXTENDS");
+    await processNodes(implementsResult.nodes, "implemented_by", "IMPLEMENTS");
 
     return children;
   }
@@ -135,13 +146,15 @@ export function registerDependsCommand(program: Command): void {
     .option("--path <path>", "Prefer symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--depth <n>", "Limit traversal depth (default: full tree)")
+    .option("--all", "Remove the 200-node cap and show the complete tree")
     .option("--format <fmt>", "Output format (text|json)", "text")
     .addHelpText("after", `\nExamples:
   ix depends verify_token
   ix depends pickBest --format json
   ix depends AuthProvider --depth 2
-  ix depends parser.py --kind file`)
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; depth?: string; format: string }) => {
+  ix depends parser.py --kind file
+  ix depends NodeKind --pick 1 --all`)
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; depth?: string; all?: boolean; format: string }) => {
       const client = new IxClient(getEndpoint());
 
       // Validate --pick
@@ -158,9 +171,10 @@ export function registerDependsCommand(program: Command): void {
       if (!target) return;
 
       const maxDepth = opts.depth ? parseInt(opts.depth, 10) : DEFAULT_MAX_DEPTH;
+      const maxNodes = opts.all ? Infinity : MAX_NODES;
 
       const { tree, truncated, nodesVisited, maxDepthReached } = await buildDependencyTree(
-        client, target.id, { maxDepth },
+        client, target.id, { maxDepth, maxNodes },
       );
 
       // ── JSON output ──────────────────────────────────────────────

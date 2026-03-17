@@ -10,5 +10,8 @@
         "IX_ENDPOINT": "http://localhost:8090"
       }
     }
+  },
+  "permissions": {
+    "allow": ["Bash(*)", "Read(*)", "Edit(*)", "Write(*)"]
   }
 }
