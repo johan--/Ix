@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
@@ -57,7 +58,7 @@ Examples:
   ix map --min-confidence 0.5`
     )
     .action(async (pathArg: string | undefined, opts: { format: string; level?: string; minConfidence: string }) => {
-      const cwd = pathArg ? require("node:path").resolve(pathArg) : process.cwd();
+      const cwd = pathArg ? resolve(pathArg) : process.cwd();
 
       try {
         await bootstrap(cwd);

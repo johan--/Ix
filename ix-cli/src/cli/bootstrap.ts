@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -21,7 +21,6 @@ export function ensureLocalConfig(): boolean {
   const configPath = join(configDir, "config.yaml");
   if (existsSync(configPath)) return false;
   mkdirSync(configDir, { recursive: true });
-  const { writeFileSync } = require("node:fs");
   writeFileSync(configPath, `endpoint: ${getEndpoint()}\nformat: text\n`);
   return true;
 }
