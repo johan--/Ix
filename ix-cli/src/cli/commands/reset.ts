@@ -7,9 +7,9 @@ import { getEndpoint } from "../config.js";
 export function registerResetCommand(program: Command): void {
   program
     .command("reset")
-    .description("Wipe all graph data and re-ingest from current directory")
+    .description("Wipe all graph data (nodes + edges)")
     .option("-y, --yes", "Skip confirmation prompt")
-    .option("--no-ingest", "Wipe only, skip the automatic re-ingest")
+    .option("--ingest", "Re-ingest current directory after wiping")
     .action(async (opts: { yes?: boolean; ingest?: boolean }) => {
       if (!opts.yes) {
         process.stdout.write(
@@ -19,7 +19,7 @@ export function registerResetCommand(program: Command): void {
           process.stdin.setEncoding("utf8");
           process.stdin.once("data", (chunk: string) => resolve(chunk.trim()));
         });
-        process.stdin.pause();
+        process.stdin.destroy();
         if (answer.toLowerCase() !== "y") {
           console.log(chalk.dim("Aborted."));
           return;
@@ -36,13 +36,13 @@ export function registerResetCommand(program: Command): void {
         return;
       }
 
-      if (opts.ingest === false) return;
-
-      console.log(chalk.dim("Re-ingesting..."));
-      const result = spawnSync(process.argv[0], [process.argv[1], "ingest", "."], {
-        stdio: "inherit",
-        cwd: process.cwd(),
-      });
-      if (result.status !== 0) process.exitCode = result.status ?? 1;
+      if (opts.ingest) {
+        console.log(chalk.dim("Re-ingesting..."));
+        const result = spawnSync(process.argv[0], [process.argv[1], "ingest", "."], {
+          stdio: "inherit",
+          cwd: process.cwd(),
+        });
+        if (result.status !== 0) process.exitCode = result.status ?? 1;
+      }
     });
 }
