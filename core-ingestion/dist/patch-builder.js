@@ -87,6 +87,9 @@ export function buildPatch(result, sourceHash, previousSourceHash) {
         const id = nodeId(filePath, qk);
         if (!seenNodeIds.has(id)) {
             seenNodeIds.add(id);
+            const roleAttrs = e.kind === 'file'
+                ? { role: result.fileRole.role, role_confidence: result.fileRole.role_confidence, role_signals: result.fileRole.role_signals }
+                : { role: result.fileRole.role, role_source: 'inherited_from_file' };
             ops.push({
                 type: 'UpsertNode',
                 id,
@@ -96,6 +99,7 @@ export function buildPatch(result, sourceHash, previousSourceHash) {
                     line_start: e.lineStart,
                     line_end: e.lineEnd,
                     language: e.language,
+                    ...roleAttrs,
                 },
             });
         }
@@ -197,12 +201,15 @@ export function buildPatchWithResolution(result, sourceHash, resolvedEdges, prev
         const id = nodeId(filePath, qk);
         if (!seenNodeIds2.has(id)) {
             seenNodeIds2.add(id);
+            const roleAttrs = e.kind === 'file'
+                ? { role: result.fileRole.role, role_confidence: result.fileRole.role_confidence, role_signals: result.fileRole.role_signals }
+                : { role: result.fileRole.role, role_source: 'inherited_from_file' };
             ops.push({
                 type: 'UpsertNode',
                 id,
                 kind: e.kind,
                 name: e.name,
-                attrs: { line_start: e.lineStart, line_end: e.lineEnd, language: e.language },
+                attrs: { line_start: e.lineStart, line_end: e.lineEnd, language: e.language, ...roleAttrs },
             });
         }
     }

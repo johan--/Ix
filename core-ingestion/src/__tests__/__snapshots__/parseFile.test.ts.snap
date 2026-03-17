@@ -225,6 +225,11 @@ exports[`parseFile snapshots > snapshots Identifiers.scala 1`] = `
     },
   ],
   "filePath": "memory-layer/src/main/scala/ix/memory/model/Identifiers.scala",
+  "fileRole": {
+    "role": "production",
+    "role_confidence": 0.5,
+    "role_signals": [],
+  },
   "language": "scala",
   "relationships": [
     {
@@ -803,6 +808,11 @@ exports[`parseFile snapshots > snapshots Node.scala 1`] = `
     },
   ],
   "filePath": "memory-layer/src/main/scala/ix/memory/model/Node.scala",
+  "fileRole": {
+    "role": "production",
+    "role_confidence": 0.5,
+    "role_signals": [],
+  },
   "language": "scala",
   "relationships": [
     {
@@ -1200,6 +1210,11 @@ exports[`parseFile snapshots > snapshots doctor.ts 1`] = `
     },
   ],
   "filePath": "ix-cli/src/cli/commands/doctor.ts",
+  "fileRole": {
+    "role": "production",
+    "role_confidence": 0.5,
+    "role_signals": [],
+  },
   "language": "typescript",
   "relationships": [
     {

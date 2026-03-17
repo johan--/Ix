@@ -28,6 +28,8 @@ import Scala from 'tree-sitter-scala';
 
 import { SupportedLanguages, languageFromPath } from './languages.js';
 import { LANGUAGE_QUERIES } from './queries.js';
+import { classifyFileRole } from './role-classifier.js';
+import type { RoleClassification } from './role-classifier.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -54,6 +56,7 @@ export interface FileParseResult {
   language: SupportedLanguages;
   entities: ParsedEntity[];
   relationships: ParsedRelationship[];
+  fileRole: RoleClassification;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +389,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       }
     }
 
-    return { filePath, language, entities, relationships };
+    return { filePath, language, entities, relationships, fileRole: classifyFileRole(filePath, source) };
   } catch {
     return null;
   }

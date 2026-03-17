@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveEdges, type FileParseResult, type ParsedEntity } from '../index.js';
 import { SupportedLanguages } from '../languages.js';
 
+const defaultFileRole = { role: 'production' as const, role_confidence: 0.5, role_signals: [] };
+
 const languages = [SupportedLanguages.TypeScript, SupportedLanguages.Scala] as const;
 const symbolNames = ['run', 'helperFn', 'NodeKind', 'execute', 'transform'] as const;
 
@@ -39,6 +41,7 @@ describe('resolveEdges property invariants', () => {
           relationships: def.includeCall
             ? [{ srcName: `caller${index}`, dstName: def.symbol, predicate: 'CALLS' }]
             : [],
+          fileRole: defaultFileRole,
         }));
 
         const resolved = resolveEdges(results);
@@ -67,6 +70,7 @@ describe('resolveEdges property invariants', () => {
           makeEntity('caller', SupportedLanguages.TypeScript),
         ],
         relationships: [{ srcName: 'caller', dstName: 'missing', predicate: 'CALLS' }],
+        fileRole: defaultFileRole,
       },
       {
         filePath: '/repo/other.scala',
@@ -76,6 +80,7 @@ describe('resolveEdges property invariants', () => {
           makeEntity('missing', SupportedLanguages.Scala),
         ],
         relationships: [],
+        fileRole: defaultFileRole,
       },
     ]);
 
@@ -90,6 +95,7 @@ describe('resolveEdges property invariants', () => {
           makeEntity('caller', SupportedLanguages.TypeScript),
         ],
         relationships: [{ srcName: 'caller', dstName: 'run', predicate: 'CALLS' }],
+        fileRole: defaultFileRole,
       },
       {
         filePath: '/repo/a.ts',
@@ -99,6 +105,7 @@ describe('resolveEdges property invariants', () => {
           makeEntity('run', SupportedLanguages.TypeScript),
         ],
         relationships: [],
+        fileRole: defaultFileRole,
       },
       {
         filePath: '/repo/b.ts',
@@ -108,6 +115,7 @@ describe('resolveEdges property invariants', () => {
           makeEntity('run', SupportedLanguages.TypeScript),
         ],
         relationships: [],
+        fileRole: defaultFileRole,
       },
     ]);
 

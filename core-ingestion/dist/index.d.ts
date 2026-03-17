@@ -1,4 +1,5 @@
 import { SupportedLanguages } from './languages.js';
+import type { RoleClassification } from './role-classifier.js';
 export interface ParsedEntity {
     name: string;
     kind: string;
@@ -18,6 +19,7 @@ export interface FileParseResult {
     language: SupportedLanguages;
     entities: ParsedEntity[];
     relationships: ParsedRelationship[];
+    fileRole: RoleClassification;
 }
 /** Returns true if a grammar is installed for the given file's language. */
 export declare function isGrammarSupported(filePath: string): boolean;

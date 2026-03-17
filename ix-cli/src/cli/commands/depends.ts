@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, printResolved, isRawId } from "../resolve.js";
+import { roleHint } from "../role-filter.js";
 import { stderr } from "../stderr.js";
 
 // ── Tree types ──────────────────────────────────────────────────────
@@ -148,13 +149,15 @@ export function registerDependsCommand(program: Command): void {
     .option("--depth <n>", "Limit traversal depth (default: full tree)")
     .option("--all", "Remove the 200-node cap and show the complete tree")
     .option("--format <fmt>", "Output format (text|json)", "text")
+    .option("--include-tests", "Include test and fixture entities in results")
+    .option("--tests-only", "Show only test and fixture entities")
     .addHelpText("after", `\nExamples:
   ix depends verify_token
   ix depends pickBest --format json
   ix depends AuthProvider --depth 2
   ix depends parser.py --kind file
   ix depends NodeKind --pick 1 --all`)
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; depth?: string; all?: boolean; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; depth?: string; all?: boolean; format: string; includeTests?: boolean; testsOnly?: boolean }) => {
       const client = new IxClient(getEndpoint());
 
       // Validate --pick
@@ -166,7 +169,13 @@ export function registerDependsCommand(program: Command): void {
         }
       }
 
-      const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
+      const resolveOpts = {
+        kind: opts.kind,
+        path: opts.path,
+        pick: opts.pick ? parseInt(opts.pick, 10) : undefined,
+        includeTests: opts.includeTests,
+        testsOnly: opts.testsOnly,
+      };
       const target = await resolveFileOrEntity(client, symbol, resolveOpts);
       if (!target) return;
 
@@ -226,5 +235,9 @@ export function registerDependsCommand(program: Command): void {
       }
 
       console.log(chalk.dim(`\n  ${nodesVisited} downstream dependents, depth ${maxDepthReached}`));
+
+      if (!opts.includeTests) {
+        console.log(chalk.dim('\nUse --include-tests to include test entities in tree.'));
+      }
     });
 }

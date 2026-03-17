@@ -19,6 +19,8 @@ function entity(
   };
 }
 
+const defaultFileRole = { role: 'production' as const, role_confidence: 0.5, role_signals: [] };
+
 function fileResult(
   filePath: string,
   language: SupportedLanguages,
@@ -33,6 +35,7 @@ function fileResult(
       ...entities,
     ],
     relationships,
+    fileRole: defaultFileRole,
   };
 }
 

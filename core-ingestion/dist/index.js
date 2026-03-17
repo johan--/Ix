@@ -27,6 +27,7 @@ import PHP from 'tree-sitter-php';
 import Scala from 'tree-sitter-scala';
 import { SupportedLanguages, languageFromPath } from './languages.js';
 import { LANGUAGE_QUERIES } from './queries.js';
+import { classifyFileRole } from './role-classifier.js';
 // ---------------------------------------------------------------------------
 // Language → grammar map
 // ---------------------------------------------------------------------------
@@ -327,7 +328,7 @@ export function parseFile(filePath, source) {
                 continue;
             }
         }
-        return { filePath, language, entities, relationships };
+        return { filePath, language, entities, relationships, fileRole: classifyFileRole(filePath, source) };
     }
     catch {
         return null;
