@@ -504,8 +504,36 @@ export function resolveEdges(results) {
             }
         }
         for (const rel of result.relationships) {
-            if (rel.predicate !== 'CALLS' && rel.predicate !== 'EXTENDS' && rel.predicate !== 'REFERENCES')
+            if (rel.predicate !== 'CALLS' && rel.predicate !== 'EXTENDS' && rel.predicate !== 'REFERENCES' && rel.predicate !== 'IMPORTS')
                 continue;
+            // Resolve Scala/Java dotted class imports (e.g. "ix.memory.model.ClaimId")
+            // to the actual indexed entity node in the defining file.
+            // Uses package-path lookup: extract package ("ix.memory.model") and entity
+            // name ("ClaimId"), find files registered under that package, then find
+            // the one that defines the entity.
+            if (rel.predicate === 'IMPORTS') {
+                if (result.language !== SupportedLanguages.Scala && result.language !== SupportedLanguages.Java)
+                    continue;
+                const dstName = rel.dstName;
+                const lastDot = dstName.lastIndexOf('.');
+                if (lastDot === -1)
+                    continue; // not a dotted class import
+                const entityName = dstName.slice(lastDot + 1);
+                if (!entityName || entityName === '_')
+                    continue; // wildcard import
+                const pkgPath = dstName.slice(0, lastDot); // e.g. "ix.memory.model"
+                // Find files in the declared package that define this entity
+                const pkgFiles = packageToFiles.get(pkgPath) ?? [];
+                const matchFiles = pkgFiles.filter(fp => fp !== srcFilePath && fileHasSymbol.get(fp)?.has(entityName));
+                if (matchFiles.length !== 1)
+                    continue; // ambiguous or not found
+                const fp = matchFiles[0];
+                const dstQualifiedKey = bestQKey(fileQKeys, fp, entityName);
+                if (dstQualifiedKey === null)
+                    continue;
+                resolved.push({ srcFilePath, srcName: rel.srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: 'IMPORTS', confidence: 0.9 });
+                continue;
+            }
             const dstName = rel.dstName;
             const srcName = rel.srcName;
             // Tier 1b: qualifier-assisted (confidence 0.9 / 0.7)
@@ -588,9 +616,11 @@ export function resolveEdges(results) {
             if (transitiveMatches.length > 1)
                 continue; // ambiguous — do not emit
             // Tier 3: global fallback (confidence 0.5) — exactly one other file defines it
+            // Only match files in the same language as the caller to avoid cross-language false positives.
+            const srcLanguage = result.language;
             const globalMatches = [];
             for (const [fp, symbols] of fileHasSymbol) {
-                if (fp !== srcFilePath && symbols.has(dstName))
+                if (fp !== srcFilePath && symbols.has(dstName) && languageFromPath(fp) === srcLanguage)
                     globalMatches.push(fp);
             }
             if (globalMatches.length === 1) {
