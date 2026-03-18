@@ -50,7 +50,7 @@ const PRO_COMMANDS: { name: string; desc: string }[] = [
 /** Commands hidden from default help but still callable. */
 const ADVANCED_COMMANDS = [
   "contains", "callers", "callees", "imports", "imported-by",
-  "entity", "text", "conflicts", "query",
+  "depends", "entity", "text", "conflicts", "query",
   // init is deprecated; ingest is now an implementation detail
   "init", "ingest",
 ];
@@ -73,7 +73,6 @@ export function registerOssCommands(program: Command): void {
   registerContainsCommand(program);
   registerStatsCommand(program);
   registerDoctorCommand(program);
-  registerDependsCommand(program);
   registerReadCommand(program);
   registerInventoryCommand(program);
   registerImpactCommand(program);
