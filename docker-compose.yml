@@ -13,7 +13,7 @@ services:
     ports:
       - "8090:8090"
     volumes:
-      - /c/Users/josep:/c/Users/josep:ro
+      - ${HOME}:${HOME}:ro
     environment:
       ARANGO_HOST: arangodb
       ARANGO_PORT: "8529"
