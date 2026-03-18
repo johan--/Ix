@@ -3,6 +3,7 @@ import type { EntityRef, Diagnostic } from "../format.js";
 import { isRawId } from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { buildDependencyTree } from "../commands/depends.js";
+import { getSystemPath } from "../hierarchy.js";
 
 export interface EntityFacts {
   // Identity
@@ -39,6 +40,11 @@ export interface EntityFacts {
   // Call details
   callList?: EntityRef[];
 
+  // Hierarchy (scene graph)
+  systemPath?: Array<{ name: string; kind: string }>;
+  subsystemName?: string;
+  moduleName?: string;
+
   // Staleness
   stale: boolean;
 
@@ -55,7 +61,7 @@ export async function collectFacts(
   const diagnostics: Diagnostic[] = [];
 
   // Run parallel graph queries (including bounded downstream tree)
-  const [details, callersResult, calleesResult, dependentsResult, importersResult, membersResult, provenance, downstream] =
+  const [details, callersResult, calleesResult, dependentsResult, importersResult, membersResult, provenance, downstream, hierarchyPath] =
     await Promise.all([
       client.entity(targetId),
       client.expand(targetId, { direction: "in", predicates: ["CALLS"] }),
@@ -67,6 +73,7 @@ export async function collectFacts(
       buildDependencyTree(client, targetId, { maxDepth: 4, maxNodes: 100 }).catch(() => ({
         tree: [], truncated: false, nodesVisited: 0, maxDepthReached: 0,
       })),
+      getSystemPath(client, targetId).catch(() => []),
     ]);
 
   const node = details.node as any;
@@ -187,6 +194,13 @@ export async function collectFacts(
   const docstring = node.attrs?.docstring || node.attrs?.description || undefined;
   const history = provenance as any;
 
+  // Extract hierarchy info
+  const systemPathMapped = hierarchyPath.length > 0
+    ? hierarchyPath.map((n: any) => ({ name: n.name, kind: n.kind }))
+    : undefined;
+  const subsystemName = hierarchyPath.find((n: any) => n.kind === "subsystem")?.name;
+  const moduleName = hierarchyPath.find((n: any) => n.kind === "module")?.name;
+
   return {
     id: targetId,
     name: node.name || node.attrs?.name || targetName,
@@ -208,6 +222,9 @@ export async function collectFacts(
     introducedRev: node.createdRev ?? node.created_rev,
     historyLength: history?.chain?.length ?? 0,
     callList,
+    systemPath: systemPathMapped,
+    subsystemName,
+    moduleName,
     stale,
     diagnostics,
   };
