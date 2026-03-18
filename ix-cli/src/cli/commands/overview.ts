@@ -8,6 +8,7 @@ import { getSystemPath, hasMapData } from "../hierarchy.js";
 import { humanizeLabel } from "../impact/risk-semantics.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
+const STRUCTURAL_CONTAINER_KINDS = new Set(["class", "object", "trait", "interface"]);
 const REGION_KINDS = new Set(["system", "subsystem", "module", "region"]);
 const FILE_KINDS = new Set(["file"]);
 
@@ -19,15 +20,20 @@ interface OverviewResult {
   path: string | null;
   systemPath: Array<{ name: string; kind: string }> | null;
   hasMapData: boolean;
+  // Container targets
   childrenByKind: Record<string, number> | null;
   keyItems: Array<{ name: string; kind: string }> | null;
+  // Leaf targets
+  containedIn: { kind: string; name: string } | null;
+  siblingsByKind: Record<string, number> | null;
+  keySiblings: Array<{ name: string; kind: string }> | null;
   diagnostics: string[];
 }
 
 export function registerOverviewCommand(program: Command): void {
   program
     .command("overview <target>")
-    .description("Structural summary — what a target contains")
+    .description("Structural summary — what a target contains or what surrounds it")
     .option("--kind <kind>", "Filter target entity by kind")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
@@ -90,7 +96,7 @@ function keyItemsLabel(kind: string): string {
   return "Key members";
 }
 
-/** Humanize a kind for the Contains section (e.g. "method" → "Methods"). */
+/** Humanize a kind for the Contains/Nearby section (e.g. "method" → "Methods"). */
 function kindLabel(kind: string): string {
   const labels: Record<string, string> = {
     method: "Methods",
@@ -115,8 +121,12 @@ function kindLabel(kind: string): string {
   };
   const label = labels[kind.toLowerCase()];
   if (label) return label;
-  // Fallback: capitalize
   return kind.charAt(0).toUpperCase() + kind.slice(1) + "s";
+}
+
+/** Sibling label: "Sibling methods", "Sibling functions", etc. */
+function siblingKindLabel(kind: string): string {
+  return `Sibling ${kindLabel(kind).toLowerCase()}`;
 }
 
 // ── Container / Region overview ─────────────────────────────────────────────
@@ -129,7 +139,6 @@ async function overviewContainer(
   const diagnostics: string[] = [];
   const isRegion = REGION_KINDS.has(target.kind);
 
-  // For regions, children come via IN_REGION; for code containers, via CONTAINS
   const childPredicate = isRegion ? "IN_REGION" : "CONTAINS";
 
   const [details, childrenResult, systemPath] = await Promise.all([
@@ -144,7 +153,6 @@ async function overviewContainer(
 
   const children = childrenResult.nodes;
 
-  // Group children by kind → count
   const childrenByKind: Record<string, number> = {};
   const childList: Array<{ name: string; kind: string }> = [];
   for (const m of children) {
@@ -155,7 +163,6 @@ async function overviewContainer(
     childList.push({ name, kind });
   }
 
-  // Key items: first N unique children
   const keyItems = childList.slice(0, KEY_ITEMS_LIMIT);
 
   const hasMap = hasMapData(systemPath);
@@ -173,6 +180,9 @@ async function overviewContainer(
     hasMapData: hasMap,
     childrenByKind: Object.keys(childrenByKind).length > 0 ? childrenByKind : null,
     keyItems: keyItems.length > 0 ? keyItems : null,
+    containedIn: null,
+    siblingsByKind: null,
+    keySiblings: null,
     diagnostics,
   };
 
@@ -181,20 +191,16 @@ async function overviewContainer(
     return;
   }
 
-  // Text rendering
-  renderOverviewHeader(target, displayPath, systemPathMapped, hasMap);
+  renderOverviewHeader(target, displayPath, null, systemPathMapped, hasMap);
 
-  // Contains
   if (Object.keys(childrenByKind).length > 0) {
     console.log(chalk.bold("\nContains"));
-    // Sort by count descending
     const sorted = Object.entries(childrenByKind).sort((a, b) => b[1] - a[1]);
     for (const [kind, count] of sorted) {
       console.log(`  ${chalk.dim(kindLabel(kind).padEnd(16))}${count}`);
     }
   }
 
-  // Key items
   if (keyItems.length > 0) {
     console.log(chalk.bold(`\n${keyItemsLabel(target.kind)}`));
     for (const item of keyItems) {
@@ -205,7 +211,7 @@ async function overviewContainer(
   renderDiagnostics(diagnostics);
 }
 
-// ── Leaf (function/method) overview ─────────────────────────────────────────
+// ── Leaf (function/method/field) overview ────────────────────────────────────
 
 async function overviewLeaf(
   client: IxClient,
@@ -214,9 +220,11 @@ async function overviewLeaf(
 ): Promise<void> {
   const diagnostics: string[] = [];
 
-  const [details, systemPath] = await Promise.all([
+  // Fetch entity details, system path, and parent container in parallel
+  const [details, systemPath, parentResult] = await Promise.all([
     client.entity(target.id),
     getSystemPath(client, target.id),
+    client.expand(target.id, { direction: "in", predicates: ["CONTAINS"] }),
   ]);
 
   const node = details.node as any;
@@ -235,6 +243,64 @@ async function overviewLeaf(
     systemPathMapped = [...systemPathMapped, { name: target.name, kind: target.kind }];
   }
 
+  // Find nearest meaningful container
+  // Prefer class/object/trait/interface, fall back to file
+  let containedIn: { kind: string; name: string } | null = null;
+  let containerId: string | null = null;
+
+  const parents = parentResult.nodes as any[];
+  const structuralParent = parents.find((p) => STRUCTURAL_CONTAINER_KINDS.has(p.kind));
+  const fileParent = parents.find((p) => FILE_KINDS.has(p.kind));
+  const bestParent = structuralParent ?? fileParent ?? parents[0];
+
+  if (bestParent) {
+    containedIn = {
+      kind: bestParent.kind || "unknown",
+      name: bestParent.name || bestParent.attrs?.name || "(unknown)",
+    };
+    containerId = bestParent.id;
+  }
+
+  // Fetch siblings from the container
+  let siblingsByKind: Record<string, number> | null = null;
+  let keySiblings: Array<{ name: string; kind: string }> | null = null;
+
+  if (containerId) {
+    try {
+      const siblingsResult = await client.expand(containerId, {
+        direction: "out",
+        predicates: ["CONTAINS"],
+      });
+
+      const siblings = (siblingsResult.nodes as any[]).filter(
+        (n) => n.id !== target.id
+      );
+
+      if (siblings.length > 0) {
+        // Group siblings by kind
+        const byKind: Record<string, number> = {};
+        const siblingList: Array<{ name: string; kind: string }> = [];
+        for (const s of siblings) {
+          const kind = s.kind || "unknown";
+          const name = s.name || s.attrs?.name || "(unnamed)";
+          byKind[kind] = (byKind[kind] || 0) + 1;
+          siblingList.push({ name, kind });
+        }
+        siblingsByKind = byKind;
+
+        // Key siblings: prefer same kind, then others, exclude target
+        const sameKind = siblingList.filter((s) => s.kind === target.kind);
+        const otherKind = siblingList.filter((s) => s.kind !== target.kind);
+        const ordered = [...sameKind, ...otherKind];
+        if (ordered.length > 0) {
+          keySiblings = ordered.slice(0, KEY_ITEMS_LIMIT);
+        }
+      }
+    } catch {
+      diagnostics.push("Could not fetch sibling structure.");
+    }
+  }
+
   const result: OverviewResult = {
     resolvedTarget: { id: target.id, kind: target.kind, name: target.name },
     resolutionMode: target.resolutionMode,
@@ -243,6 +309,9 @@ async function overviewLeaf(
     hasMapData: hasMap,
     childrenByKind: null,
     keyItems: null,
+    containedIn,
+    siblingsByKind,
+    keySiblings,
     diagnostics,
   };
 
@@ -251,7 +320,25 @@ async function overviewLeaf(
     return;
   }
 
-  renderOverviewHeader(target, displayPath, systemPathMapped, hasMap);
+  renderOverviewHeader(target, displayPath, containedIn, systemPathMapped, hasMap);
+
+  // Nearby structure
+  if (siblingsByKind && Object.keys(siblingsByKind).length > 0) {
+    console.log(chalk.bold("\nNearby structure"));
+    const sorted = Object.entries(siblingsByKind).sort((a, b) => b[1] - a[1]);
+    for (const [kind, count] of sorted) {
+      console.log(`  ${chalk.dim(siblingKindLabel(kind).padEnd(24))}${count}`);
+    }
+  }
+
+  // Key siblings
+  if (keySiblings && keySiblings.length > 0) {
+    console.log(chalk.bold("\nKey siblings"));
+    for (const s of keySiblings) {
+      console.log(`  ${s.name}`);
+    }
+  }
+
   renderDiagnostics(diagnostics);
 }
 
@@ -260,16 +347,23 @@ async function overviewLeaf(
 function renderOverviewHeader(
   target: { kind: string; name: string },
   displayPath: string | null,
+  containedIn: { kind: string; name: string } | null,
   systemPath: Array<{ name: string; kind: string }>,
   hasMap: boolean,
 ): void {
   console.log(chalk.bold("\nOverview"));
-  console.log(`  ${chalk.dim("Kind:".padEnd(14))}${target.kind}`);
+  console.log(`  ${chalk.dim("Kind:".padEnd(16))}${target.kind}`);
   if (displayPath) {
-    console.log(`  ${chalk.dim("File:".padEnd(14))}${displayPath}`);
+    console.log(`  ${chalk.dim("File:".padEnd(16))}${displayPath}`);
+  }
+  if (containedIn) {
+    const containerLabel = STRUCTURAL_CONTAINER_KINDS.has(containedIn.kind)
+      ? `${containedIn.kind} ${containedIn.name}`
+      : containedIn.name;
+    console.log(`  ${chalk.dim("Contained in:".padEnd(16))}${containerLabel}`);
   }
   if (systemPath.length > 1 && hasMap) {
-    console.log(`  ${chalk.dim("System path:".padEnd(14))}${humanizeBreadcrumb(systemPath)}`);
+    console.log(`  ${chalk.dim("System path:".padEnd(16))}${humanizeBreadcrumb(systemPath)}`);
   }
 }
 

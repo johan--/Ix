@@ -4,8 +4,9 @@ import { humanizeLabel } from "../impact/risk-semantics.js";
 /**
  * Tests for ix overview output structure.
  *
- * These verify that overview is purely structural and downward-facing:
- * kind, file path, system path, child counts, key items — no role/risk/dependency content.
+ * Containers: child counts + key items.
+ * Leaves: contained-in + nearby structure + key siblings.
+ * No role/risk/dependency content anywhere.
  */
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -30,6 +31,9 @@ function makeClassOutput() {
       { name: "listByKind", kind: "method" },
       { name: "listPatches", kind: "method" },
     ],
+    containedIn: null,
+    siblingsByKind: null,
+    keySiblings: null,
     diagnostics: [],
   };
 }
@@ -51,6 +55,9 @@ function makeFileOutput() {
       { name: "Node", kind: "class" },
       { name: "NodeId", kind: "object" },
     ],
+    containedIn: null,
+    siblingsByKind: null,
+    keySiblings: null,
     diagnostics: [],
   };
 }
@@ -71,11 +78,14 @@ function makeRegionOutput() {
       { name: "resolve.ts", kind: "file" },
       { name: "status.ts", kind: "file" },
     ],
+    containedIn: null,
+    siblingsByKind: null,
+    keySiblings: null,
     diagnostics: [],
   };
 }
 
-function makeFunctionOutput() {
+function makeFunctionInFileOutput() {
   return {
     resolvedTarget: { id: "fn-1", kind: "function", name: "pickBest" },
     resolutionMode: "exact",
@@ -89,6 +99,42 @@ function makeFunctionOutput() {
     hasMapData: true,
     childrenByKind: null,
     keyItems: null,
+    containedIn: { kind: "file", name: "resolve.ts" },
+    siblingsByKind: { function: 8 },
+    keySiblings: [
+      { name: "resolveEntity", kind: "function" },
+      { name: "resolveEntityFull", kind: "function" },
+      { name: "scoreCandidate", kind: "function" },
+      { name: "buildAmbiguous", kind: "function" },
+      { name: "nodeToResolved", kind: "function" },
+    ],
+    diagnostics: [],
+  };
+}
+
+function makeMethodInClassOutput() {
+  return {
+    resolvedTarget: { id: "m-1", kind: "method", name: "resolve" },
+    resolutionMode: "exact",
+    path: "memory-layer/src/main/scala/ix/memory/conflict/ConflictService.scala",
+    systemPath: [
+      { name: "API", kind: "system" },
+      { name: "Model", kind: "subsystem" },
+      { name: "ConflictService.scala", kind: "file" },
+      { name: "ConflictService", kind: "class" },
+      { name: "resolve", kind: "method" },
+    ],
+    hasMapData: true,
+    childrenByKind: null,
+    keyItems: null,
+    containedIn: { kind: "class", name: "ConflictService" },
+    siblingsByKind: { method: 6 },
+    keySiblings: [
+      { name: "tryGitLsFiles", kind: "method" },
+      { name: "resolveRelativePath", kind: "method" },
+      { name: "normalizePath", kind: "method" },
+      { name: "mergeConflict", kind: "method" },
+    ],
     diagnostics: [],
   };
 }
@@ -108,6 +154,13 @@ describe("overview: class target", () => {
     expect(output.keyItems).not.toBeNull();
     expect(output.keyItems!.length).toBeLessThanOrEqual(5);
     expect(output.keyItems!.map((i) => i.name)).toContain("get");
+  });
+
+  it("has no leaf-specific fields", () => {
+    const output = makeClassOutput();
+    expect(output.containedIn).toBeNull();
+    expect(output.siblingsByKind).toBeNull();
+    expect(output.keySiblings).toBeNull();
   });
 
   it("has no callers, dependents, or risk text", () => {
@@ -173,25 +226,73 @@ describe("overview: region/subsystem target", () => {
   });
 });
 
-// ── Method/function target ──────────────────────────────────────────────────
+// ── Leaf target in file ─────────────────────────────────────────────────────
 
-describe("overview: method/function target", () => {
-  it("stays minimal with no fake contained structure", () => {
-    const output = makeFunctionOutput();
+describe("overview: leaf target in file", () => {
+  it("shows contained-in as the file", () => {
+    const output = makeFunctionInFileOutput();
+    expect(output.containedIn).not.toBeNull();
+    expect(output.containedIn!.kind).toBe("file");
+    expect(output.containedIn!.name).toBe("resolve.ts");
+  });
+
+  it("shows nearby structure with sibling counts", () => {
+    const output = makeFunctionInFileOutput();
+    expect(output.siblingsByKind).not.toBeNull();
+    expect(output.siblingsByKind!.function).toBe(8);
+  });
+
+  it("shows key siblings", () => {
+    const output = makeFunctionInFileOutput();
+    expect(output.keySiblings).not.toBeNull();
+    expect(output.keySiblings!.length).toBeLessThanOrEqual(5);
+    expect(output.keySiblings!.map((s) => s.name)).toContain("resolveEntity");
+  });
+
+  it("does not have container-specific fields", () => {
+    const output = makeFunctionInFileOutput();
     expect(output.childrenByKind).toBeNull();
     expect(output.keyItems).toBeNull();
   });
 
-  it("has file and system path", () => {
-    const output = makeFunctionOutput();
-    expect(output.path).toBe("src/cli/resolve.ts");
-    expect(output.systemPath!.length).toBeGreaterThan(1);
+  it("has no callers/dependents/role/risk text", () => {
+    const output = makeFunctionInFileOutput();
+    const keys = Object.keys(output);
+    expect(keys).not.toContain("callers");
+    expect(keys).not.toContain("dependents");
+    expect(keys).not.toContain("riskSummary");
+    expect(keys).not.toContain("usedBy");
+    expect(keys).not.toContain("whyItMatters");
+  });
+});
+
+// ── Leaf target in class ────────────────────────────────────────────────────
+
+describe("overview: leaf target in class", () => {
+  it("nearest meaningful container is the class", () => {
+    const output = makeMethodInClassOutput();
+    expect(output.containedIn).not.toBeNull();
+    expect(output.containedIn!.kind).toBe("class");
+    expect(output.containedIn!.name).toBe("ConflictService");
   });
 
-  it("system path ends with the function name", () => {
-    const output = makeFunctionOutput();
-    const last = output.systemPath![output.systemPath!.length - 1];
-    expect(last.name).toBe("pickBest");
+  it("shows sibling methods", () => {
+    const output = makeMethodInClassOutput();
+    expect(output.siblingsByKind).not.toBeNull();
+    expect(output.siblingsByKind!.method).toBe(6);
+  });
+
+  it("shows key siblings", () => {
+    const output = makeMethodInClassOutput();
+    expect(output.keySiblings).not.toBeNull();
+    expect(output.keySiblings!.map((s) => s.name)).toContain("mergeConflict");
+  });
+
+  it("system path includes class and method", () => {
+    const output = makeMethodInClassOutput();
+    const names = output.systemPath!.map((n) => n.name);
+    expect(names).toContain("ConflictService");
+    expect(names).toContain("resolve");
   });
 });
 
@@ -212,7 +313,10 @@ describe("overview: humanized system path labels", () => {
 // ── No-overlap regression ───────────────────────────────────────────────────
 
 describe("overview: no-overlap regression", () => {
-  const allOutputs = [makeClassOutput(), makeFileOutput(), makeRegionOutput(), makeFunctionOutput()];
+  const allOutputs = [
+    makeClassOutput(), makeFileOutput(), makeRegionOutput(),
+    makeFunctionInFileOutput(), makeMethodInClassOutput(),
+  ];
   const allKeys = new Set(allOutputs.flatMap((o) => Object.keys(o)));
 
   it("does not include 'usedBy' or 'whyItMatters'", () => {
@@ -237,7 +341,6 @@ describe("overview: no-overlap regression", () => {
   });
 
   it("does not include imports count", () => {
-    // imports belonged to the old overview — now removed
     for (const o of allOutputs) {
       expect((o as any).summary?.imports).toBeUndefined();
     }
