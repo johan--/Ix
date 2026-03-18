@@ -1,13 +1,22 @@
+import * as path from "node:path";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
-import { resolveFileOrEntity, printResolved } from "../resolve.js";
+import {
+  resolveFileOrEntity, resolveEntityFull, printResolved, printAmbiguous,
+  looksFileLike, isRawId, type ResolvedEntity,
+} from "../resolve.js";
 import { isFileStale } from "../stale.js";
 import { stderr } from "../stderr.js";
 import { getSystemPath, hasMapData } from "../hierarchy.js";
+import { humanizeLabel } from "../impact/risk-semantics.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
+const FILE_KINDS = new Set(["file"]);
+
+// Region kinds whose names should be humanized in system path
+const REGION_KINDS = new Set(["system", "subsystem", "module", "region"]);
 
 interface LocateOutput {
   resolvedTarget: { id: string; kind: string; name: string; path?: string } | null;
@@ -36,11 +45,18 @@ export function registerLocateCommand(program: Command): void {
     .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: string; format: string }) => {
       const client = new IxClient(getEndpoint());
       const diagnostics: string[] = [];
+      const isJson = opts.format === "json";
 
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick ? parseInt(opts.pick, 10) : undefined };
-      const target = await resolveFileOrEntity(client, symbol, resolveOpts);
+
+      // Resolution with ambiguity detection
+      const { target, ambiguous } = await resolveWithAmbiguity(client, symbol, resolveOpts, isJson);
 
       if (!target) {
+        if (ambiguous) {
+          // Ambiguity already printed — stop cleanly
+          return;
+        }
         const output: LocateOutput = {
           resolvedTarget: null,
           resolutionMode: "none",
@@ -51,9 +67,10 @@ export function registerLocateCommand(program: Command): void {
         return;
       }
 
-      if (opts.format !== "json") printResolved(target);
+      if (!isJson) printResolved(target);
 
       const isContainer = CONTAINER_KINDS.has(target.kind);
+      const isFile = FILE_KINDS.has(target.kind);
 
       // Parallel fetch: system path, parent container (for non-containers), entity details
       const [systemPath, containsResult, details] = await Promise.all([
@@ -92,23 +109,34 @@ export function registerLocateCommand(program: Command): void {
       }
 
       // Diagnostic for missing map data
-      if (!hasMapData(systemPath)) {
+      const hasMap = hasMapData(systemPath);
+      if (!hasMap) {
         diagnostics.push("No system map. Run `ix map` to see hierarchy.");
       }
 
-      const hasMap = hasMapData(systemPath);
+      // Build system path: append resolved symbol for non-file targets
+      let systemPathMapped = systemPath.map((n) => ({ name: n.name, kind: n.kind }));
+      if (!isFile) {
+        const lastInPath = systemPathMapped[systemPathMapped.length - 1];
+        if (!lastInPath || lastInPath.name !== target.name) {
+          systemPathMapped = [...systemPathMapped, { name: target.name, kind: target.kind }];
+        }
+      }
+
+      // Make path repo-relative
+      const displayPath = nodePath ? toRepoRelative(nodePath) : undefined;
 
       const output: LocateOutput = {
         resolvedTarget: {
           id: target.id,
           kind: target.kind,
           name: target.name,
-          path: nodePath,
+          path: displayPath,
         },
         resolutionMode: target.resolutionMode,
         lineRange,
         container,
-        systemPath: systemPath.map((n) => ({ name: n.name, kind: n.kind })),
+        systemPath: systemPathMapped,
         hasMapData: hasMap,
         diagnostics,
       };
@@ -119,6 +147,70 @@ export function registerLocateCommand(program: Command): void {
       outputLocate(output, symbol, opts.format);
     });
 }
+
+// ── Ambiguity-aware resolution ──────────────────────────────────────────────
+
+async function resolveWithAmbiguity(
+  client: IxClient,
+  symbol: string,
+  opts: { kind?: string; path?: string; pick?: number },
+  isJson: boolean,
+): Promise<{ target: ResolvedEntity | null; ambiguous: boolean }> {
+  // For raw IDs and file-like targets, delegate to resolveFileOrEntity (no ambiguity)
+  if (isRawId(symbol) || looksFileLike(symbol)) {
+    const target = await resolveFileOrEntity(client, symbol, opts);
+    return { target, ambiguous: false };
+  }
+
+  // Symbol resolution — use full result to detect ambiguity
+  const allKinds = ["file", "class", "object", "trait", "interface", "module", "function", "method"];
+  const result = await resolveEntityFull(client, symbol, allKinds, opts);
+
+  if (result.resolved) {
+    return { target: result.entity, ambiguous: false };
+  }
+
+  if (result.ambiguous) {
+    if (isJson) {
+      console.log(JSON.stringify({
+        resolvedTarget: null,
+        resolutionMode: "ambiguous",
+        candidates: result.result.candidates,
+        systemPath: null,
+        diagnostics: result.result.diagnostics ?? [],
+      }, null, 2));
+    } else {
+      printAmbiguous(symbol, result.result, opts);
+    }
+    return { target: null, ambiguous: true };
+  }
+
+  return { target: null, ambiguous: false };
+}
+
+// ── Repo-relative path ──────────────────────────────────────────────────────
+
+function toRepoRelative(filePath: string): string {
+  if (!path.isAbsolute(filePath)) return filePath;
+  try {
+    const cwd = process.cwd();
+    const rel = path.relative(cwd, filePath);
+    // Only use relative if it doesn't escape the repo (no leading ../)
+    if (!rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
+  } catch {}
+  return filePath;
+}
+
+// ── Humanized system path breadcrumb ────────────────────────────────────────
+
+function humanizeBreadcrumb(nodes: Array<{ name: string; kind: string }>): string {
+  return nodes.map((n) => {
+    if (REGION_KINDS.has(n.kind)) return humanizeLabel(n.name).replace(/ layer$/, "");
+    return n.name;
+  }).join(" → ");
+}
+
+// ── Output ──────────────────────────────────────────────────────────────────
 
 function outputLocate(output: LocateOutput, symbol: string, format: string): void {
   if (format === "json") {
@@ -153,9 +245,8 @@ function outputLocate(output: LocateOutput, symbol: string, format: string): voi
 
   // System path section
   if (output.systemPath && output.systemPath.length > 1 && output.hasMapData) {
-    const breadcrumb = output.systemPath.map((n) => n.name).join(" → ");
     console.log(chalk.bold("\nSystem path"));
-    console.log(`  ${breadcrumb}`);
+    console.log(`  ${humanizeBreadcrumb(output.systemPath)}`);
   }
 
   // Diagnostics

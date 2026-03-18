@@ -335,7 +335,7 @@ function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
   };
 }
 
-function printAmbiguous(symbol: string, result: AmbiguousResult, opts?: { kind?: string; path?: string }): void {
+export function printAmbiguous(symbol: string, result: AmbiguousResult, opts?: { kind?: string; path?: string }): void {
   stderr(`Ambiguous symbol "${symbol}":`);
   for (let i = 0; i < result.candidates.length; i++) {
     const c = result.candidates[i];
