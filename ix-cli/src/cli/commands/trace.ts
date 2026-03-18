@@ -4,7 +4,7 @@ import { IxClient } from "../../client/api.js";
 import { getEndpoint } from "../config.js";
 import { resolveFileOrEntity, isRawId } from "../resolve.js";
 import { stderr } from "../stderr.js";
-import { buildDependencyTree, type DependencyNode } from "./depends.js";
+import { buildDependencyTree } from "./depends.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -26,8 +26,8 @@ interface PathNode {
 
 // ── Constants ────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_DEPTH = 20;
-const MAX_NODES = 200;
+const DEFAULT_MAX_DEPTH = Infinity;
+const MAX_NODES = Infinity;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -161,7 +161,7 @@ async function findPath(
 
 // ── Text rendering ───────────────────────────────────────────────────
 
-function renderTraceTree(children: Array<{ name: string; children: any[]; cycle?: boolean }>, isLast: boolean[]): string[] {
+function renderTraceTree(children: Array<{ name: string; kind?: string; children: any[]; cycle?: boolean }>, isLast: boolean[]): string[] {
   const lines: string[] = [];
 
   for (let i = 0; i < children.length; i++) {
@@ -174,11 +174,14 @@ function renderTraceTree(children: Array<{ name: string; children: any[]; cycle?
       indent += il ? "   " : "│  ";
     }
 
+    const kindStr = child.cycle
+      ? chalk.dim((child.kind ?? "").padEnd(10))
+      : chalk.cyan((child.kind ?? "").padEnd(10));
     const nameStr = child.cycle
       ? chalk.dim(child.name) + chalk.yellow(" ↺")
       : child.name;
 
-    lines.push(`${indent}${connector}${nameStr}`);
+    lines.push(`${indent}${connector}${kindStr} ${nameStr}`);
 
     if (child.children.length > 0) {
       lines.push(...renderTraceTree(child.children, [...isLast, last]));
@@ -188,13 +191,13 @@ function renderTraceTree(children: Array<{ name: string; children: any[]; cycle?
   return lines;
 }
 
-function printSection(label: string): void {
-  console.log(chalk.bold(label));
-}
 
 function printKV(key: string, value: string, indent = "  "): void {
   console.log(`${indent}${chalk.dim(key + ":")} ${value}`);
 }
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 
 // ── Command ──────────────────────────────────────────────────────────
 
@@ -203,12 +206,11 @@ export function registerTraceCommand(program: Command): void {
     .command("trace <symbol>")
     .description("Follow how it connects")
     .option("--to <target>", "Find path to target symbol")
-    .option("--upstream", "Show inward flow (what leads to this)")
-    .option("--downstream", "Show outward flow (what this leads to)")
-    .option("--both", "Show both upstream and downstream")
+    .option("--upstream", "Show who calls/imports this (same as depends)")
+    .option("--downstream", "Show what this calls/imports (outward flow)")
     .option("--kind <kind>", "Relationship kind: calls|imports|depends|contains")
-    .option("--depth <n>", "Limit traversal depth (default: full tree)")
-    .option("--all", "Remove the 200-node cap and show the complete tree")
+    .option("--depth <n>", "Cap traversal depth")
+    .option("--cap <n>", "Cap number of nodes visited, per direction")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)")
     .option("--path <path>", "Prefer symbols from files matching this path substring")
     .option("--format <fmt>", "Output format (text|json)", "text")
@@ -220,7 +222,6 @@ export function registerTraceCommand(program: Command): void {
   ix trace IxClient
   ix trace IxClient --downstream
   ix trace resolve --upstream
-  ix trace pickBest --both
   ix trace registerImpactCommand --to IxClient
   ix trace api.ts --kind imports
   ix trace IxClient --depth 3 --format json`,
@@ -232,10 +233,9 @@ export function registerTraceCommand(program: Command): void {
           to?: string;
           upstream?: boolean;
           downstream?: boolean;
-          both?: boolean;
           kind?: string;
           depth?: string;
-          all?: boolean;
+          cap?: string;
           pick?: string;
           path?: string;
           format: string;
@@ -262,7 +262,7 @@ export function registerTraceCommand(program: Command): void {
         };
 
         const maxDepth = opts.depth ? parseInt(opts.depth, 10) : DEFAULT_MAX_DEPTH;
-        const maxNodes = opts.all ? Infinity : MAX_NODES;
+        const maxNodes = opts.cap ? parseInt(opts.cap, 10) : MAX_NODES;
 
         // ── Path mode (--to) ────────────────────────────────────────
         if (opts.to) {
@@ -293,7 +293,7 @@ export function registerTraceCommand(program: Command): void {
               kind: relKind,
             };
             if (pathNodes.length > 0) {
-              const mapped = pathNodes.map((n, i) => ({ id: n.id, name: n.name, kind: n.kind }));
+              const mapped = pathNodes.map((n) => ({ id: n.id, name: n.name, kind: n.kind }));
               output.path = mapped;
               output.summary = { path_length: pathNodes.length };
             } else {
@@ -314,7 +314,7 @@ export function registerTraceCommand(program: Command): void {
           console.log(chalk.bold("\nTrace"));
           printKV("From", fromTarget.name);
           printKV("To  ", toTarget.name);
-          printKV("Kind", relKind);
+          printKV("Kind", cap(relKind));
 
           if (pathNodes.length === 0) {
             console.log(`\nNo route found from ${chalk.bold(fromTarget.name)} to ${chalk.bold(toTarget.name)}.`);
@@ -344,17 +344,18 @@ export function registerTraceCommand(program: Command): void {
         const relKind = opts.kind ?? "mixed";
 
         // Determine direction(s)
-        const doBoth = opts.both === true;
         const doUpstream = opts.upstream === true;
+        const doDownstream = opts.downstream === true;
+        const doBoth = !doUpstream && !doDownstream;
         const direction = doBoth ? "both" : doUpstream ? "upstream" : "downstream";
 
-        // downstream = "in" (who depends on this — same as depends)
-        // upstream   = "out" (what this depends on — inverse of depends)
+        // upstream   = "in" (who depends on this — same as depends)
+        // downstream = "out" (what this depends on — inverse of depends)
 
         // ── Both: run up + down in parallel ────────────────────────
         if (doBoth) {
-          const [downResult, upResult] = await Promise.all([
-            buildDependencyTree(client, target.id, { maxDepth, maxNodes }),
+          const [upResult, downResult] = await Promise.all([
+            buildDependencyTree(client, target.id, { maxDepth, maxNodes, predicates }),
             buildTraceTree(client, target.id, {
               direction: "out",
               predicates,
@@ -392,11 +393,10 @@ export function registerTraceCommand(program: Command): void {
           // ── Text ──────────────────────────────────────────────
           console.log(`${chalk.bold("Resolved:")} ${target.kind} ${chalk.bold(target.name)}`);
           console.log(chalk.bold("\nTrace"));
-          printKV("Direction", "both");
-          printKV("Kind     ", relKind);
-          printKV("Depth    ", String(maxDepth));
+          printKV("Direction", "Both");
+          printKV("Kind     ", cap(relKind));
 
-          // Upstream section (out edges — what this depends on)
+          // Upstream section (in edges — who depends on this)
           console.log(chalk.bold("\nUpstream"));
           console.log(`  ${target.name}`);
           if (upResult.tree.length === 0) {
@@ -407,7 +407,7 @@ export function registerTraceCommand(program: Command): void {
             }
           }
 
-          // Downstream section (in edges — who depends on this)
+          // Downstream section (out edges — what this depends on)
           console.log(chalk.bold("\nDownstream"));
           console.log(`  ${target.name}`);
           if (downResult.tree.length === 0) {
@@ -420,9 +420,6 @@ export function registerTraceCommand(program: Command): void {
 
           const totalNodes = upResult.nodesVisited + downResult.nodesVisited;
           const maxD = Math.max(upResult.maxDepthReached, downResult.maxDepthReached);
-          if (upResult.truncated || downResult.truncated) {
-            console.log(chalk.yellow(`\nNote\n  Trace truncated after ${MAX_NODES} nodes. Use --depth or --format json for more control.`));
-          }
           console.log(chalk.bold("\nSummary"));
           printKV("Nodes visited", String(totalNodes));
           printKV("Max depth    ", String(maxD));
@@ -431,8 +428,8 @@ export function registerTraceCommand(program: Command): void {
 
         // ── Single direction ────────────────────────────────────────
         const { tree, truncated, nodesVisited, maxDepthReached } = doUpstream
-          ? await buildTraceTree(client, target.id, { direction: "out", predicates, maxDepth, maxNodes })
-          : await buildDependencyTree(client, target.id, { maxDepth, maxNodes });
+          ? await buildDependencyTree(client, target.id, { maxDepth, maxNodes, predicates })
+          : await buildTraceTree(client, target.id, { direction: "out", predicates, maxDepth, maxNodes });
 
         // ── JSON ────────────────────────────────────────────────────
         if (opts.format === "json") {
@@ -486,9 +483,10 @@ export function registerTraceCommand(program: Command): void {
         // ── Text ────────────────────────────────────────────────────
         console.log(`${chalk.bold("Resolved:")} ${target.kind} ${chalk.bold(target.name)}`);
         console.log(chalk.bold("\nTrace"));
-        printKV("Direction", direction);
-        printKV("Kind     ", relKind);
+        printKV("Direction", cap(direction));
+        printKV("Kind     ", cap(relKind));
         printKV("Depth    ", String(maxDepth));
+        if (isFinite(maxNodes)) printKV("Cap      ", String(maxNodes));
 
         if (tree.length === 0) {
           const relDir = doUpstream ? "upstream" : "downstream";
@@ -502,11 +500,6 @@ export function registerTraceCommand(program: Command): void {
           console.log(`  ${line}`);
         }
 
-        if (truncated) {
-          console.log(
-            chalk.yellow(`\nNote\n  Trace truncated after ${maxNodes} nodes. Use --depth or --format json for more control.`),
-          );
-        }
 
         console.log(chalk.bold("\nSummary"));
         printKV("Nodes visited", String(nodesVisited));
