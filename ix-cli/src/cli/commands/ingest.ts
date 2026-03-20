@@ -95,12 +95,16 @@ export async function ingestFiles(
   path: string,
   opts: { recursive?: boolean; force?: boolean; format: string; root?: string; debug?: boolean }
 ): Promise<void> {
+  const debug = opts.debug || process.env.IX_DEBUG === '1';
+  const trueStart = performance.now();
+
   const [{ parseFile, resolveEdges, isGrammarSupported }, { buildPatchWithResolution }] = await loadIngestionModules();
+  const moduleLoadMs = Math.round(performance.now() - trueStart);
+
   const resolvedPath = nodePath.isAbsolute(path)
     ? path
     : nodePath.resolve(resolveWorkspaceRoot(opts.root), path);
 
-  const debug = opts.debug || process.env.IX_DEBUG === '1';
   const client = new IxClient(getEndpoint());
   const start = performance.now();
 
@@ -121,7 +125,7 @@ export async function ingestFiles(
   let entitiesParsed = 0;
 
   // Phase timing marks
-  const timings = { discoverMs: 0, hashMs: 0, parseMs: 0, resolveMs: 0, commitMs: 0 };
+  const timings = { moduleLoadMs, discoverMs: 0, hashMs: 0, parseMs: 0, resolveMs: 0, commitMs: 0 };
   const resolveStats = {
     importLookups: 0, transitiveLookups: 0, globalFallbacks: 0,
     globalCandidateTotal: 0, resolvedImport: 0, resolvedTransitive: 0,
@@ -271,6 +275,7 @@ export async function ingestFiles(
 
     if (debug) {
       console.log(chalk.dim(`\n  Phase timings:`));
+      console.log(chalk.dim(`    modules:  ${timings.moduleLoadMs}ms`));
       console.log(chalk.dim(`    discover: ${timings.discoverMs}ms`));
       console.log(chalk.dim(`    hash:     ${timings.hashMs}ms`));
       console.log(chalk.dim(`    parse:    ${timings.parseMs}ms`));

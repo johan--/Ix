@@ -183,8 +183,8 @@ export class IxClient {
     return this.post<PatchCommitResult>('/v1/patches/bulk', { patches });
   }
 
-  async map(): Promise<any> {
-    return this.post("/v1/map", {});
+  async map(opts?: { full?: boolean }): Promise<any> {
+    return this.post("/v1/map", { full: opts?.full });
   }
 
   async reset(): Promise<{ ok: boolean; message: string }> {

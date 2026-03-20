@@ -73,6 +73,7 @@ export function registerMapCommand(program: Command): void {
     .option("--format <fmt>", "Output format (text|json)", "text")
     .option("--level <n>", "Show only regions at this level (1=finest, higher=coarser)")
     .option("--min-confidence <n>", "Only show regions above this confidence threshold (0-1)", "0")
+    .option("--full", "Force full local map, bypassing automatic safety limits (advanced/testing)")
     .addHelpText(
       "after",
       `
@@ -85,13 +86,20 @@ Levels:
   2 = subsystem    (mid-level, ~20-100 files)
   3 = system       (top-level architectural regions)
 
+Advanced:
+  --full    Override automatic local safety limits and force the full local map
+            path. Bypasses automatic downgrade to fast mode and the persistence
+            safety guardrail. Intended for testing and performance diagnosis.
+
 Examples:
   ix map .
   ix map --format json
   ix map --level 2
-  ix map --min-confidence 0.5`
+  ix map --min-confidence 0.5
+  ix map . --full
+  ix --debug map . --full`
     )
-    .action(async (pathArg: string | undefined, opts: { format: string; level?: string; minConfidence: string }) => {
+    .action(async (pathArg: string | undefined, opts: { format: string; level?: string; minConfidence: string; full?: boolean }) => {
       const cwd = pathArg ? resolve(pathArg) : process.cwd();
 
       try {
@@ -100,6 +108,14 @@ Examples:
         console.error(chalk.red("Error:"), err.message);
         process.exitCode = 1;
         return;
+      }
+
+      // Print warning when --full override is active
+      if (opts.full && opts.format !== "json") {
+        console.log(chalk.yellow("\nWarning"));
+        console.log(chalk.yellow("  Full local map override enabled.\n"));
+        console.log("  Ix will ignore automatic local safety limits and attempt full local mapping.");
+        console.log("  This may take a long time or fail on very large systems.\n");
       }
 
       // Ingest the path before mapping so the graph is up to date
@@ -116,7 +132,7 @@ Examples:
 
       let result: MapResult;
       try {
-        result = await client.map() as MapResult;
+        result = await client.map({ full: opts.full }) as MapResult;
       } catch (err: any) {
         const msg: string = err.message ?? "";
         const structured = parseBackendError(msg);

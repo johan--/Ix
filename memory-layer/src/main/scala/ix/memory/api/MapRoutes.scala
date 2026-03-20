@@ -1,7 +1,8 @@
 package ix.memory.api
 
 import cats.effect.IO
-import io.circe.Json
+import io.circe.{Decoder, Json}
+import io.circe.generic.semiauto.deriveDecoder
 import io.circe.syntax._
 import org.http4s.HttpRoutes
 import org.http4s.circe.CirceEntityCodec._
@@ -12,12 +13,16 @@ import ix.memory.model.NodeId
 
 class MapRoutes(mapService: MapService) {
 
+  private case class MapRequest(full: Option[Boolean])
+  private implicit val mapReqDecoder: Decoder[MapRequest] = deriveDecoder
+
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
 
     /** POST /v1/map — Run the full map pipeline and return the hierarchy. */
-    case POST -> Root / "v1" / "map" =>
+    case req @ POST -> Root / "v1" / "map" =>
       (for {
-        archMap <- mapService.buildMap()
+        body    <- req.as[MapRequest].handleErrorWith(_ => IO.pure(MapRequest(None)))
+        archMap <- mapService.buildMap(forceFullLocal = body.full.getOrElse(false))
         resp    <- Ok(encodeMap(archMap))
       } yield resp).handleErrorWith(ErrorHandler.handle(_))
   }

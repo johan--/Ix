@@ -54,13 +54,14 @@ class MapService(
     else if (level == 1)        "module"
     else                         "subsystem"
 
-  def buildMap(): IO[ArchitectureMap] =
+  def buildMap(forceFullLocal: Boolean = false): IO[ArchitectureMap] =
     for {
       rev   <- queryApi.getLatestRev
       files <- builder.discoverFiles()
       pf    <- preflight.evaluate(files)
-      result <- pf.mode match {
-        case MapExecutionMode.FullLocal => buildFullLocal(files, pf, rev)
+      mode   = if (forceFullLocal) MapExecutionMode.FullLocal else pf.mode
+      result <- mode match {
+        case MapExecutionMode.FullLocal => buildFullLocal(files, pf, rev, forceFullLocal)
         case MapExecutionMode.FastLocal => buildFastLocal(files, pf, rev)
       }
     } yield result
@@ -68,7 +69,8 @@ class MapService(
   private def buildFullLocal(
     files: Vector[FileVertex],
     pf:    MapPreflightResult,
-    rev:   Rev
+    rev:   Rev,
+    bypassPersistenceGuard: Boolean = false
   ): IO[ArchitectureMap] =
     for {
       rawGraph      <- builder.buildGraph(files)
@@ -76,7 +78,7 @@ class MapService(
       graph          = applyPenalty(rawGraph, crosscutScores)
       levels         = LouvainClustering.cluster(graph, maxLevels = 3, minCommunitySize = 3)
       regions        = buildRegions(graph, levels, crosscutScores, rev)
-      pe            <- guardAndPersist(regions, rev)
+      pe            <- guardAndPersist(regions, rev, bypassPersistenceGuard)
       _             <- logOutcome(MapOutcome.FullLocalCompleted, pf, pe)
     } yield ArchitectureMap(
       regions, rawGraph.vertices.size, rev.value,
@@ -407,7 +409,11 @@ class MapService(
 
   // ── Persistence guardrail + logging ─────────────────────────────────
 
-  private def guardAndPersist(regions: Vector[Region], rev: Rev): IO[PersistenceEstimate] = {
+  private def guardAndPersist(
+    regions: Vector[Region],
+    rev:     Rev,
+    bypassGuard: Boolean = false
+  ): IO[PersistenceEstimate] = {
     if (regions.isEmpty) return IO.pure(PersistenceEstimate(0, 0, 0, 0, 0))
 
     for {
@@ -416,14 +422,20 @@ class MapService(
       _          <- logger.debug(
         s"Persistence estimate: ${pe.totalOps} ops " +
         s"(${pe.regionNodes} regions, ${pe.fileEdges} file edges, " +
-        s"${pe.regionEdges} region edges, ${pe.deleteOps} deletes)"
+        s"${pe.regionEdges} region edges, ${pe.deleteOps} deletes)" +
+        (if (bypassGuard) " [guard bypassed via --full]" else "")
       )
-      _          <- if (pe.totalOps > MaxSafePatchOps)
+      _          <- if (!bypassGuard && pe.totalOps > MaxSafePatchOps)
                       IO.raiseError(new MapCapacityException(
                         outcome     = MapOutcome.LocalMapTooLarge,
                         userMessage = "Local map output is too large to persist safely.",
                         next        = "For full system mapping at this scale, use Ix Cloud."
                       ))
+                    else if (bypassGuard && pe.totalOps > MaxSafePatchOps)
+                      logger.info(
+                        s"Persistence guard bypassed (--full): ${pe.totalOps} ops exceeds " +
+                        s"limit of $MaxSafePatchOps, continuing anyway"
+                      )
                     else IO.unit
       _          <- submitMapPatch(oldRegions, regions, rev)
     } yield pe
