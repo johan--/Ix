@@ -69,7 +69,7 @@ class RoutesSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers with TestD
     val bulkIngestionService = new BulkIngestionService(parserRouter, bulkWriteApi, queryApi)
     val mapService           = new MapService(client, queryApi, writeApi)
 
-    Routes.all(contextService, ingestionService, bulkIngestionService, queryApi, writeApi, conflictService, client, mapService).orNotFound
+    Routes.all(contextService, ingestionService, bulkIngestionService, queryApi, writeApi, conflictService, client, mapService, bulkWriteApi).orNotFound
   }
 
   "Routes" should "return 200 OK for health check" in {

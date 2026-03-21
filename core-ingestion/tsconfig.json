@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "declaration": true,
     "skipLibCheck": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
   "include": ["src"]
 }
