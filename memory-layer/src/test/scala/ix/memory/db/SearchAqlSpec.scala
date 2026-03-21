@@ -46,6 +46,6 @@ class SearchAqlSpec extends AnyFlatSpec with Matchers {
     val gpbSource = scala.io.Source.fromFile(
       "core-ingestion/src/patch-builder.ts"
     ).mkString
-    gpbSource should include ("`${filePath}:${src}:${dst}:${predicate}`")
+    gpbSource should include ("`${normalizePath(filePath)}:${src}:${dst}:${predicate}`")
   }
 }
