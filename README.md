@@ -39,7 +39,7 @@ ix docker start
 # 2. Connect a project
 cd ~/my-project
 ix init
-ix ingest ./src --recursive
+ix map ./src
 
 # 3. Use it
 ix overview MyService
@@ -102,7 +102,7 @@ ix bug create "Parser fails on decorators" --severity high
 ### GitHub Ingestion
 
 ```bash
-ix ingest --github owner/repo --since 2026-01-01 --limit 50
+ix map --github owner/repo --since 2026-01-01 --limit 50
 ```
 
 Auth resolution: `--token <pat>` → `GITHUB_TOKEN` env → `gh auth token`
