@@ -25,25 +25,6 @@ GITHUB_ORG="ix-infrastructure"
 GITHUB_REPO="Ix"
 GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main"
 
-# Auth header for private repo access
-AUTH_HEADER=""
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
-elif command -v gh >/dev/null 2>&1; then
-  GH_TOKEN=$(gh auth token 2>/dev/null || true)
-  if [ -n "$GH_TOKEN" ]; then
-    AUTH_HEADER="Authorization: token ${GH_TOKEN}"
-  fi
-fi
-
-# Curl wrapper that includes auth if available
-gcurl() {
-  if [ -n "$AUTH_HEADER" ]; then
-    curl -fsSL -H "$AUTH_HEADER" "$@"
-  else
-    curl -fsSL "$@"
-  fi
-}
 IX_HOME="${IX_HOME:-$HOME/.ix}"
 IX_BIN="$HOME/.local/bin"
 IX_DATA="$IX_HOME/data"
@@ -70,7 +51,7 @@ resolve_version() {
   # Try GitHub API for latest release
   if command -v curl >/dev/null 2>&1; then
     local latest
-    latest=$(gcurl "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest" 2>/dev/null \
+    latest=$(curl -fsSL "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest" 2>/dev/null \
       | grep '"tag_name"' | head -1 | sed 's/.*"v\(.*\)".*/\1/' || true)
     if [ -n "$latest" ]; then
       echo "$latest"
@@ -223,7 +204,7 @@ else
     mkdir -p "$COMPOSE_DIR"
 
     # Download docker-compose.yml
-    gcurl "${GITHUB_RAW}/docker-compose.standalone.yml" -o "$COMPOSE_DIR/docker-compose.yml"
+    curl -fsSL "${GITHUB_RAW}/docker-compose.standalone.yml" -o "$COMPOSE_DIR/docker-compose.yml"
     info "Downloaded docker-compose.yml → $COMPOSE_DIR"
 
     # Start services
@@ -275,21 +256,7 @@ if [ ! -x "$IX_BIN/ix" ] || [ "$("$IX_BIN/ix" --version 2>/dev/null || echo "")"
   mkdir -p "$INSTALL_DIR" "$IX_BIN"
 
   echo "  Downloading ix CLI v${VERSION} for ${PLATFORM}..."
-  DOWNLOAD_OK=false
-  # Try gh CLI first (handles private repos automatically)
-  if command -v gh >/dev/null 2>&1; then
-    if gh release download "v${VERSION}" --repo "${GITHUB_ORG}/${GITHUB_REPO}" \
-         --pattern "${TARBALL_NAME}" --dir /tmp 2>/dev/null; then
-      DOWNLOAD_OK=true
-    fi
-  fi
-  # Fallback to curl
-  if [ "$DOWNLOAD_OK" = false ]; then
-    if gcurl "$TARBALL_URL" -o "/tmp/${TARBALL_NAME}" 2>/dev/null; then
-      DOWNLOAD_OK=true
-    fi
-  fi
-  if [ "$DOWNLOAD_OK" = false ]; then
+  if ! curl -fsSL "$TARBALL_URL" -o "/tmp/${TARBALL_NAME}" 2>/dev/null; then
     echo ""
     warn "Could not download pre-built CLI from:"
     warn "  $TARBALL_URL"
@@ -330,8 +297,7 @@ elif ! command -v claude >/dev/null 2>&1; then
   echo "  Install Claude Code and re-run, or install hooks manually:"
   echo "    curl -fsSL ${GITHUB_RAW}/ix-plugin/install.sh | bash"
 else
-  # Download and run the hook installer, passing auth token through
-  gcurl "${GITHUB_RAW}/ix-plugin/install.sh" | GITHUB_TOKEN="${AUTH_HEADER#Authorization: token }" bash
+  curl -fsSL "${GITHUB_RAW}/ix-plugin/install.sh" | bash
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
