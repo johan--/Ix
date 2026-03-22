@@ -137,15 +137,6 @@ brew uninstall ix && brew untap ix-infrastructure/ix
 ix docker stop --remove-data
 ```
 
-## Maintainer Setup
-
-If you're forking or self-hosting Ix, after the first release workflow pushes the Docker image to GitHub Container Registry you must make the package public — GHCR defaults all packages to private even on public repos:
-
-1. Go to **GitHub → Your Org → Packages → ix-memory-layer → Settings**
-2. Change **Visibility** to **Public**
-
-Without this, `docker pull ghcr.io/<org>/ix-memory-layer` will fail with `unauthorized` for anyone who isn't authenticated.
-
 ## Architecture
 
 ```
