@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.3](https://github.com/ix-infrastructure/Ix/compare/v0.3.2...v0.3.3) (2026-03-22)
+
+
+### Bug Fixes
+
+* remove private repo auth from install scripts ([1ad91ca](https://github.com/ix-infrastructure/Ix/commit/1ad91cabc94e8d6727807992cb0b3c7f1ef01f58))
+* use PR instead of direct push for Homebrew formula updates ([b863954](https://github.com/ix-infrastructure/Ix/commit/b86395481ec60c3db79e8df3bdbc7b45573de363))
+* use PR instead of direct push for Homebrew formula updates ([07f45a9](https://github.com/ix-infrastructure/Ix/commit/07f45a9b21bcb2fe5616f0f3b698a70bb32b50ff))
+
 ## [0.3.2](https://github.com/ix-infrastructure/Ix/compare/v0.3.1...v0.3.2) (2026-03-22)
 
 
