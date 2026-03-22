@@ -9,8 +9,14 @@ class Ix < Formula
   depends_on "node@22"
 
   def install
+    # core-ingestion must be built first — the CLI build depends on it
+    cd "core-ingestion" do
+      system "npm", "install", "--silent"
+      system "npm", "run", "build"
+    end
+
     cd "ix-cli" do
-      system "npm", "install", "--production", "--silent"
+      system "npm", "install", "--silent"
       system "npm", "run", "build"
 
       # Install the compiled CLI and its dependencies

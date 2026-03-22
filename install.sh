@@ -283,6 +283,11 @@ SHIM
   chmod +x "$IX_BIN/ix"
 
   ensure_path
+
+  # Make ix available in the current shell immediately
+  export PATH="$IX_BIN:$PATH"
+  hash -r 2>/dev/null || true
+
   info "Installed: ~/.local/bin/ix"
 fi
 
@@ -309,9 +314,16 @@ echo "╚═══════════════════════�
 echo ""
 echo "  Backend:  http://localhost:8090"
 echo "  ArangoDB: http://localhost:8529"
-echo "  CLI:      ix status"
 echo ""
-echo "  Open a new shell (or run: export PATH=\"\$HOME/.local/bin:\$PATH\")"
+
+# Verify CLI works
+if command -v ix >/dev/null 2>&1; then
+  CLI_VERSION=$(ix --version 2>/dev/null || echo "unknown")
+  info "ix CLI v${CLI_VERSION} is working"
+else
+  warn "ix is not in PATH yet — open a new terminal to use it"
+fi
+
 echo ""
 echo "  Connect a project:"
 echo "    cd ~/my-project && ix init"
