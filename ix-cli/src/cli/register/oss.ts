@@ -29,6 +29,8 @@ import { registerMapCommand } from "../commands/map.js";
 import { registerResetCommand } from "../commands/reset.js";
 import { registerConfigCommand } from "../commands/config.js";
 import { registerTraceCommand } from "../commands/trace.js";
+import { registerSmellsCommand } from "../commands/smells.js";
+import { registerSubsystemsCommand } from "../commands/subsystems.js";
 
 const PRO_COMMANDS: { name: string; desc: string }[] = [
   { name: "briefing", desc: "Session-resume briefing" },
@@ -83,6 +85,8 @@ export function registerOssCommands(program: Command): void {
   registerDockerCommand(program);
   registerWorkflowsHelpCommand(program);
   registerMapCommand(program);
+  registerSmellsCommand(program);
+  registerSubsystemsCommand(program);
   registerResetCommand(program);
   registerConfigCommand(program);
   registerTraceCommand(program);
