@@ -188,6 +188,7 @@ jobs:
 
       # ── 6. Update Homebrew formula via PR ──────────────────────────────
       - name: Update Homebrew formula
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
