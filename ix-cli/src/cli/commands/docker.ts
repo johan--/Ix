@@ -88,6 +88,20 @@ export function registerDockerCommand(program: Command): void {
     .alias("up")
     .description("Start the IX backend (ArangoDB + Memory Layer)")
     .action(async () => {
+      // Always ensure standalone compose file exists so stop/restart work from any directory
+      if (!existsSync(LOCAL_COMPOSE)) {
+        try {
+          mkdirSync(COMPOSE_DIR, { recursive: true });
+          execFileSync(
+            "curl",
+            ["-fsSL", `${GITHUB_RAW}/docker-compose.standalone.yml`, "-o", LOCAL_COMPOSE],
+            { stdio: "ignore" }
+          );
+        } catch {
+          // Non-critical — start can still work from repo dir
+        }
+      }
+
       if (isHealthy()) {
         console.log("[ok] Backend is already running and healthy");
         console.log("  Memory Layer: http://localhost:8090");
