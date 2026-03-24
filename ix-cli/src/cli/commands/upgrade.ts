@@ -1,9 +1,13 @@
 import { Command } from "commander";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { homedir, tmpdir } from "os";
 import chalk from "chalk";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const GITHUB_ORG = "ix-infrastructure";
 const GITHUB_REPO = "Ix";
