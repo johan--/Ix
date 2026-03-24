@@ -44,7 +44,18 @@ class BulkWriteApi(client: ArangoClient) {
       Option(doc.get("logical_id")).map(_.toString)
     }
 
+    // Collect source URIs so we can tombstone ALL old nodes for each file.
+    // This is needed when a re-ingest changes an entity's qualified key (e.g.
+    // a method gains a container, shifting its nodeId). Tombstoning only by
+    // logical_id would leave the old orphaned entity alive.
+    // Include both slash variants so that nodes stored with backslash paths
+    // (Windows) are also matched when re-ingesting with forward-slash paths.
+    val sourceUris = fileBatches.map(_.filePath).distinct.flatMap { p =>
+      Seq(p, p.replace('\\', '/'), p.replace('/', '\\'))
+    }.distinct
+
     for {
+      _ <- tombstoneNodesBySourceUri(sourceUris, newRev)
       _ <- tombstoneExistingNodes(logicalIds, newRev)
       _ <- retireOldClaims(fileBatches, newRev)
       _ <- withRetry(client.bulkInsert("nodes", allNodes))
@@ -53,6 +64,30 @@ class BulkWriteApi(client: ArangoClient) {
       _ <- withRetry(client.bulkInsert("patches", allPatches))
       _ <- updateRevision(newRev)
     } yield CommitResult(Rev(newRev), CommitStatus.Ok)
+  }
+
+  /** Tombstone every live node whose provenance.source_uri matches one of the given paths.
+   *  Called before inserting new nodes so that stale entities (whose nodeId changed because
+   *  they gained or lost a container) are cleaned up even though they share no logical_id
+   *  with the incoming replacements.
+   */
+  private def tombstoneNodesBySourceUri(sourceUris: Vector[String], newRev: Long): IO[Unit] = {
+    if (sourceUris.isEmpty) IO.unit
+    else {
+      val uriList = new java.util.ArrayList[String](sourceUris.size)
+      sourceUris.foreach(uriList.add)
+      client.execute(
+        """FOR n IN nodes
+          |  FILTER n.provenance.source_uri IN @uris
+          |    AND n.deleted_rev == null
+          |  UPDATE n WITH { deleted_rev: @rev, updated_at: @now } IN nodes""".stripMargin,
+        Map(
+          "uris" -> uriList.asInstanceOf[AnyRef],
+          "rev" -> Long.box(newRev).asInstanceOf[AnyRef],
+          "now" -> Instant.now().toString.asInstanceOf[AnyRef]
+        )
+      )
+    }
   }
 
   private def tombstoneExistingNodes(logicalIds: Vector[String], newRev: Long): IO[Unit] = {

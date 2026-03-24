@@ -84,7 +84,11 @@ export function scoreCandidate(
   if (opts?.path) {
     const pathLower = opts.path.toLowerCase();
     if (sourceUri.includes(pathLower)) {
-      score -= 4; // strong path preference
+      // Specificity bonus: a longer/more specific filter string gives a larger
+      // score reduction, breaking ties when many entities share the same short
+      // path prefix (e.g. 8 structs named Handle all under "tokio/").
+      const specificityRatio = pathLower.length / Math.max(sourceUri.length, 1);
+      score -= 4 + Math.round(specificityRatio * 6); // bonus from 4 to 10
     }
   }
 
@@ -101,7 +105,7 @@ export async function resolveEntity(
   client: IxClient,
   symbol: string,
   preferredKinds: string[],
-  opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean }
+  opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean; searchLimit?: number }
 ): Promise<ResolvedEntity | null> {
   const result = await resolveEntityFull(client, symbol, preferredKinds, opts);
   if (result.resolved) return result.entity;
@@ -122,10 +126,10 @@ export async function resolveEntityFull(
   client: IxClient,
   symbol: string,
   preferredKinds: string[],
-  opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean }
+  opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean; searchLimit?: number }
 ): Promise<ResolveResult> {
   const kindFilter = opts?.kind;
-  const nodes = await client.search(symbol, { limit: 20, kind: kindFilter, nameOnly: true });
+  const nodes = await client.search(symbol, { limit: opts?.searchLimit ?? 20, kind: kindFilter, nameOnly: true });
 
   if (nodes.length === 0) {
     stderr(`No entity found matching "${symbol}".`);
@@ -133,14 +137,38 @@ export async function resolveEntityFull(
   }
 
   // Apply role filter before scoring
-  const { filtered: filteredNodes, hiddenTestCount } = applyRoleFilter(nodes, opts ?? {});
+  const { filtered: roleFiltered, hiddenTestCount } = applyRoleFilter(nodes, opts ?? {});
+
+  // Hard path filter: when --path is provided, exclude candidates whose sourceUri does not
+  // contain the filter string. If no candidates survive, return "not found" rather than
+  // falling back to cross-repo results.
+  const filteredNodes = opts?.path
+    ? roleFiltered.filter((n: any) => {
+        const uri = (n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "").toLowerCase();
+        return uri.includes(opts.path!.toLowerCase());
+      })
+    : roleFiltered;
+
+  if (opts?.path && filteredNodes.length === 0) {
+    stderr(`No entity named "${symbol}" found in paths matching "${opts.path}".`);
+    return { resolved: false, ambiguous: false, hiddenTestCount };
+  }
 
   // ── Phase 1: Exact-name candidates ──────────────────────────────────
   const symbolLower = symbol.toLowerCase();
-  const exactName = filteredNodes.filter((n: any) => {
-    const name = (n.name || n.attrs?.name || "").toLowerCase();
-    return name === symbolLower;
+  // Prefer case-sensitive exact matches. Fall back to case-insensitive only if none found.
+  // This prevents e.g. 'Apply' (capital A) from matching lowercase 'apply' module import
+  // aliases before finding the actual 'Apply' method entities.
+  const exactCaseName = filteredNodes.filter((n: any) => {
+    const name = (n.name || n.attrs?.name || "");
+    return name === symbol;
   });
+  const exactName = exactCaseName.length > 0
+    ? exactCaseName
+    : filteredNodes.filter((n: any) => {
+        const name = (n.name || n.attrs?.name || "").toLowerCase();
+        return name === symbolLower;
+      });
 
   // Score exact-name candidates
   if (exactName.length > 0) {
@@ -230,6 +258,17 @@ function pickBest(
     return { resolved: true, entity: nodeToResolved(best.node, symbol, resolutionMode(best, opts)) };
   }
 
+  // If the best candidate ranks strictly higher in the kind preference list than all
+  // other top-tier candidates, auto-pick it — the preference list is the tiebreaker.
+  const topTierKindRanks = topTier.map(s => {
+    const idx = preferredKinds.indexOf((s.node.kind || "").toLowerCase());
+    return idx >= 0 ? idx : preferredKinds.length;
+  });
+  const bestKindRank = topTierKindRanks[0];
+  if (topTier.length > 1 && topTierKindRanks.every((r, i) => i === 0 || r > bestKindRank)) {
+    return { resolved: true, entity: nodeToResolved(best.node, symbol, "preferred-kind") };
+  }
+
   // If best is a container kind and second is a method/function, prefer the container
   const bestKind = (best.node.kind || "").toLowerCase();
   const secondKind = (second.node.kind || "").toLowerCase();
@@ -250,7 +289,7 @@ function pickBest(
   // Genuinely ambiguous — return only structurally relevant candidates
   const ambiguousCandidates = unique
     .filter(s => s.score <= topScore + 5) // only candidates within range
-    .slice(0, 5);
+    .slice(0, 8);
 
   return {
     resolved: false,
@@ -316,7 +355,7 @@ function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
   const seen = new Set<string>();
   const candidates: AmbiguousResult["candidates"] = [];
   let rank = 0;
-  for (let i = 0; i < nodes.length && i < 5; i++) {
+  for (let i = 0; i < nodes.length && i < 8; i++) {
     const node = nodes[i] as any;
     if (seen.has(node.id)) continue;
     seen.add(node.id);
@@ -366,6 +405,35 @@ export function printResolved(target: ResolvedEntity): void {
 export function isRawId(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(s)
     || /^[0-9a-f]{32,}$/i.test(s);
+}
+
+// ── Scoped symbol parsing (e.g. C++ ClassName::methodName) ────────────────
+
+/**
+ * Convert a CamelCase or PascalCase identifier to snake_case.
+ * Used to derive a file path hint from a C++/Rust class name.
+ * Examples: "CompactionJob" → "compaction_job", "DBImpl" → "db_impl"
+ */
+function camelToSnake(s: string): string {
+  return s
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+    .toLowerCase();
+}
+
+/**
+ * Parse a scoped symbol like "ClassName::methodName" (C++/Rust/PHP style).
+ * Returns the class and method parts, or null if no `::` is present.
+ * Uses the *last* `::` so that nested scopes like `ns::Class::method` resolve
+ * to `{ className: "ns::Class", methodName: "method" }`.
+ */
+function parseScopedSymbol(symbol: string): { className: string; methodName: string } | null {
+  const idx = symbol.lastIndexOf('::');
+  if (idx < 1) return null;
+  const className = symbol.slice(0, idx);
+  const methodName = symbol.slice(idx + 2);
+  if (!className || !methodName) return null;
+  return { className, methodName };
 }
 
 // ── File-first resolution ─────────────────────────────────────────────────
@@ -425,8 +493,56 @@ export async function resolveFileOrEntity(
     // Fall through to symbol resolution
   }
 
+  // 2.5 Scoped symbol (e.g. "CompactionJob::Run", "ns::Class::method")
+  const scoped = parseScopedSymbol(target);
+  if (scoped) {
+    // Phase A: resolve the class entity to obtain its actual source file path.
+    // This gives a precise path hint rather than a guess from snake_case conversion.
+    // We suppress stderr during this lookup to avoid confusing "not found" noise.
+    const shortClassName = scoped.className.split('::').pop()!;
+    const classEntity = await resolveEntity(
+      client,
+      shortClassName,
+      ['class', 'interface', 'struct', 'trait', 'object', 'function'],
+      { ...opts, kind: opts?.kind ? undefined : undefined },  // no kind constraint for class lookup
+    );
+
+    // Determine the best path hint: prefer the actual file path from phase A,
+    // fall back to snake_case conversion of the class name.
+    let pathHint: string;
+    if (classEntity?.path) {
+      // Extract basename without extension (e.g. "/db/flush_job.h" → "flush_job")
+      const basename = classEntity.path.replace(/\\/g, '/').split('/').pop() ?? '';
+      pathHint = basename.replace(/\.[^.]+$/, '').toLowerCase();
+    } else {
+      // Fallback: CamelCase → snake_case (e.g. "CompactionJob" → "compaction_job")
+      pathHint = camelToSnake(shortClassName);
+    }
+
+    // Phase B: find the method, boosting candidates in the class's source file.
+    // Use pathHint (derived from the class entity's actual source file) as the
+    // path constraint — it is always more specific than the user's broad --path
+    // workspace filter (e.g. "rocksdb"), so it takes priority.
+    // Use a higher search limit so that methods in the correct file are not
+    // pushed out by unrelated Run/Execute methods in other classes.
+    // We deliberately do NOT force kind=method because some parsers classify
+    // class methods as kind "function".
+    const scopedOpts = {
+      ...opts,
+      path: pathHint,        // always use the class-derived hint, not opts?.path
+      searchLimit: 50,
+    };
+    const entity = await resolveEntity(client, scoped.methodName, ['method', 'function'], scopedOpts);
+    if (entity) {
+      // Rewrite the display name to show the full scoped form
+      return { ...entity, name: `${scoped.className}::${scoped.methodName}` };
+    }
+    // Not found — return null (don't fall through to a literal "Foo::Bar" search)
+    return null;
+  }
+
   // 3. Symbol resolution (handles all entity kinds)
-  const allKinds = ["file", "class", "object", "trait", "interface", "module", "function", "method"];
+  const allKinds = ["file", "class", "object", "trait", "interface", "module", "method", "function"];
   return resolveEntity(client, target, allKinds, opts);
 }
 

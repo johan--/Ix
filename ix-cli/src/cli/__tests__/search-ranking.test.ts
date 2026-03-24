@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { resolveEntityFull } from "../resolve.js";
 
 /**
  * Verify that search ranking correctly incorporates backend _search_weight.
@@ -112,5 +113,74 @@ describe("search ranking with backend weight", () => {
     expect(r2.tier).toBeLessThanOrEqual(2);
     // No weight → falls through to resolver
     expect(r3.matchSource).toBe("resolver");
+  });
+});
+
+describe("resolveEntityFull --path hard exclusion", () => {
+  it("excludes out-of-scope candidates even on exact name match", async () => {
+    // Simulates Bug 1: etcd has 'Notifier' but prometheus does not.
+    // With --path prometheus, the etcd candidate must be excluded entirely.
+    const etcdNotifier = {
+      id: "etcd-notifier-id",
+      name: "Notifier",
+      kind: "class",
+      provenance: { sourceUri: "etcd/pkg/notify/notify.go" },
+    };
+    const mockClient = {
+      search: vi.fn().mockResolvedValue([etcdNotifier]),
+    } as any;
+
+    const result = await resolveEntityFull(mockClient, "Notifier", ["class"], { path: "prometheus" });
+
+    expect(result.resolved).toBe(false);
+    if (!result.resolved) {
+      expect(result.ambiguous).toBe(false);
+    }
+  });
+
+  it("resolves when the only candidate matches the path filter", async () => {
+    const promNotifier = {
+      id: "prom-notifier-id",
+      name: "Notifier",
+      kind: "class",
+      provenance: { sourceUri: "prometheus/notifier/notifier.go" },
+    };
+    const mockClient = {
+      search: vi.fn().mockResolvedValue([promNotifier]),
+    } as any;
+
+    const result = await resolveEntityFull(mockClient, "Notifier", ["class"], { path: "prometheus" });
+
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.entity.id).toBe("prom-notifier-id");
+    }
+  });
+
+  it("prefers in-scope candidate over higher-scored out-of-scope candidate", async () => {
+    // Both repos have 'Manager'; only the prometheus one should be returned.
+    const etcdManager = {
+      id: "etcd-manager-id",
+      name: "Manager",
+      kind: "class",
+      provenance: { sourceUri: "etcd/raft/manager.go" },
+    };
+    const promManager = {
+      id: "prom-manager-id",
+      name: "Manager",
+      kind: "class",
+      provenance: { sourceUri: "prometheus/notifier/manager.go" },
+    };
+    const mockClient = {
+      search: vi.fn().mockResolvedValue([etcdManager, promManager]),
+    } as any;
+
+    const result = await resolveEntityFull(mockClient, "Manager", ["class"], { path: "prometheus" });
+
+    // etcdManager is excluded by the path filter; only promManager survives → single candidate → resolved
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.entity.id).toBe("prom-manager-id");
+    }
   });
 });

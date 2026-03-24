@@ -54,5 +54,69 @@ def top_level():
       dstName: 'save',
       predicate: 'CALLS',
     });
+    // The qualifier pattern also emits the fully-qualified form so Tier-1b
+    // resolution can resolve e.g. Session.execute → session.py when the
+    // qualifier is a class name present in the caller's imports.
+    expect(result!.relationships).toContainEqual({
+      srcName: 'Service.run',
+      dstName: 'value.save',
+      predicate: 'CALLS',
+    });
+  });
+
+  it('resolves qualifier from constructor call assignment (Pattern 1)', () => {
+    const result = parseFile(
+      '/repo/views.py',
+      `
+def my_view(request):
+    conn = MyClass()
+    conn.execute()
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    // Constructor call itself: MyClass()
+    expect(result!.relationships).toContainEqual({
+      srcName: 'my_view',
+      dstName: 'MyClass',
+      predicate: 'CALLS',
+    });
+    // conn resolved to MyClass via assignTypeMap → MyClass.execute
+    expect(result!.relationships).toContainEqual({
+      srcName: 'my_view',
+      dstName: 'MyClass.execute',
+      predicate: 'CALLS',
+    });
+    // bare callee edge is also emitted
+    expect(result!.relationships).toContainEqual({
+      srcName: 'my_view',
+      dstName: 'execute',
+      predicate: 'CALLS',
+    });
+  });
+
+  it('resolves qualifier from Model.objects.method() assignment (Pattern 2)', () => {
+    const result = parseFile(
+      '/repo/views.py',
+      `
+def list_items():
+    queryset = MyModel.objects.all()
+    queryset.filter()
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    // ORM call emits MyModel.all via the two-level qualifier query
+    expect(result!.relationships).toContainEqual({
+      srcName: 'list_items',
+      dstName: 'MyModel.all',
+      predicate: 'CALLS',
+    });
+    // queryset resolved to MyModel via assignTypeMap → MyModel.filter
+    expect(result!.relationships).toContainEqual({
+      srcName: 'list_items',
+      dstName: 'MyModel.filter',
+      predicate: 'CALLS',
+    });
   });
 });

@@ -19,12 +19,14 @@ const TEST_PATH_PATTERNS: Array<{ pattern: RegExp; signal: string }> = [
   { pattern: /[/\\]src[/\\]test[/\\]/i,        signal: 'path:src/test/' },
   { pattern: /[/\\]test[/\\]unit[/\\]/i,       signal: 'path:test/unit/' },
   { pattern: /[/\\]test[/\\]integration[/\\]/i,signal: 'path:test/integration/' },
+  // C#/.NET: directories named Foo.Tests or Foo.Test (e.g. Newtonsoft.Json.Tests/)
+  { pattern: /[/\\][^/\\]*\.tests?[/\\]/i,     signal: 'path:.Tests/' },
 ];
 
 const TEST_FILE_PATTERNS: Array<{ pattern: RegExp; signal: string }> = [
   { pattern: /\.test\.[^.]+$/i,  signal: 'filename:.test.' },
   { pattern: /\.spec\.[^.]+$/i,  signal: 'filename:.spec.' },
-  { pattern: /Test\.[^.]+$/,     signal: 'filename:Test.' },
+  { pattern: /Tests?\.[^.]+$/,   signal: 'filename:Test(s).' },  // matches Test.cs and Tests.cs
   { pattern: /Spec\.[^.]+$/,     signal: 'filename:Spec.' },
   { pattern: /_test\.[^.]+$/i,   signal: 'filename:_test.' },
   { pattern: /_spec\.[^.]+$/i,   signal: 'filename:_spec.' },
@@ -45,6 +47,10 @@ const TEST_IMPORT_PATTERNS: Array<{ pattern: RegExp; signal: string }> = [
   { pattern: /"testing"/,                                                            signal: 'import:go_testing' },
   { pattern: /require\s+['"]rspec['"]/,                                              signal: 'import:rspec' },
   { pattern: /require\s+['"]minitest['"]/,                                           signal: 'import:minitest' },
+  // C#/.NET test frameworks
+  { pattern: /using\s+NUnit\.Framework/,                                             signal: 'import:nunit' },
+  { pattern: /using\s+Xunit/,                                                        signal: 'import:xunit' },
+  { pattern: /using\s+Microsoft\.VisualStudio\.TestTools\.UnitTesting/,              signal: 'import:mstest' },
 ];
 
 const FIXTURE_PATH_PATTERNS: Array<{ pattern: RegExp; signal: string }> = [

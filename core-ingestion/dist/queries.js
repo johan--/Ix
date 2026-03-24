@@ -61,6 +61,13 @@ export const TYPESCRIPT_QUERIES = `
   function: (member_expression
     property: (property_identifier) @call.name)) @call
 
+; this.method() — capture this as qualifier so index.ts can substitute the enclosing class.
+; Analogous to Python's self/cls substitution.
+(call_expression
+  function: (member_expression
+    object: (this) @_qualifier
+    property: (property_identifier) @call.name)) @call
+
 ; Constructor calls: new Foo()
 (new_expression
   constructor: (identifier) @call.name) @call
@@ -165,6 +172,13 @@ export const JAVASCRIPT_QUERIES = `
   function: (member_expression
     property: (property_identifier) @call.name)) @call
 
+; this.method() — capture this as qualifier so index.ts can substitute the enclosing class.
+; Analogous to Python's self/cls substitution.
+(call_expression
+  function: (member_expression
+    object: (this) @_qualifier
+    property: (property_identifier) @call.name)) @call
+
 ; Constructor calls: new Foo()
 (new_expression
   constructor: (identifier) @call.name) @call
@@ -205,6 +219,37 @@ export const PYTHON_QUERIES = `
   function: (attribute
     attribute: (identifier) @call.name)) @call
 
+; Attribute calls with object captured as qualifier so Tier-1b resolution can use
+; class/module name to break ties (e.g. Session.execute → resolves to Session in
+; the importing file).  Emitted alongside the bare-name pattern above so that
+; bare-name global fallback still fires when qualifier resolution fails.
+(call
+  function: (attribute
+    object: (identifier) @_qualifier
+    attribute: (identifier) @call.name)) @call
+
+; Django ORM manager pattern: Model.objects.method(...)
+; Unwinds the intermediate accessor (objects/related_manager/etc.) and captures
+; the model class as qualifier, e.g. User.objects.filter(...) → CALLS User.filter.
+; This creates cross-file edges between view/form code and model definitions.
+(call
+  function: (attribute
+    object: (attribute
+      object: (identifier) @_qualifier
+      attribute: (identifier))
+    attribute: (identifier) @call.name)) @call
+
+; Chained call pattern: qualifier.method1(...).method2(...)
+; Propagates the qualifier from the inner call to the outer, e.g.
+; User.filter(...).order_by(...) → CALLS User.order_by.
+(call
+  function: (attribute
+    object: (call
+      function: (attribute
+        object: (identifier) @_qualifier
+        attribute: (identifier)))
+    attribute: (identifier) @call.name)) @call
+
 ; Heritage queries - Python class inheritance
 (class_definition
   name: (identifier) @heritage.class
@@ -214,6 +259,45 @@ export const PYTHON_QUERIES = `
 ; Type references — captures types used in type annotations / hints
 (typed_parameter type: (type (identifier) @reference.type))
 (typed_default_parameter type: (type (identifier) @reference.type))
+
+; Typed parameters: capture name + type together so qualifier substitution can
+; map a local variable name to its declared class (e.g. query: Query → 'query' → 'Query').
+(function_definition
+  parameters: (parameters
+    (typed_parameter
+      (identifier) @_typed_param_name
+      type: (type (identifier) @_typed_param_type)))) @_typed_param_scope
+
+(function_definition
+  parameters: (parameters
+    (typed_default_parameter
+      (identifier) @_typed_param_name
+      type: (type (identifier) @_typed_param_type)))) @_typed_param_scope
+
+; Assignment tracking: x = SomeClass() or x = SomeClass(args)
+; Maps local variable name → constructor type for untyped-parameter qualifier substitution.
+; Only PascalCase RHS names are tracked in TypeScript (constructor convention).
+(function_definition
+  body: (block
+    (expression_statement
+      (assignment
+        left: (identifier) @_assign_lhs
+        right: (call
+          function: (identifier) @_assign_rhs_type))))) @_assign_scope
+
+; Assignment tracking: x = Model.objects.method()
+; Captures the outermost identifier (model class) for ORM manager patterns.
+(function_definition
+  body: (block
+    (expression_statement
+      (assignment
+        left: (identifier) @_assign_lhs
+        right: (call
+          function: (attribute
+            object: (attribute
+              object: (identifier) @_assign_rhs_type
+              attribute: (identifier))
+            attribute: (identifier))))))) @_assign_scope
 `;
 // Java queries - works with tree-sitter-java
 export const JAVA_QUERIES = `
@@ -237,13 +321,29 @@ export const JAVA_QUERIES = `
 ; Constructor calls: new Foo()
 (object_creation_expression type: (type_identifier) @call.name) @call
 
-; Heritage - extends class
+; Heritage - extends class (plain: extends Foo)
 (class_declaration name: (identifier) @heritage.class
   (superclass (type_identifier) @heritage.extends)) @heritage
 
-; Heritage - implements interfaces
+; Heritage - extends class with generics (extends Foo<T>)
+(class_declaration name: (identifier) @heritage.class
+  (superclass (generic_type (type_identifier) @heritage.extends))) @heritage
+
+; Heritage - implements interfaces (plain: implements Foo)
 (class_declaration name: (identifier) @heritage.class
   (super_interfaces (type_list (type_identifier) @heritage.implements))) @heritage.impl
+
+; Heritage - implements interfaces with generics (implements Foo<T>)
+(class_declaration name: (identifier) @heritage.class
+  (super_interfaces (type_list (generic_type (type_identifier) @heritage.implements)))) @heritage.impl
+
+; Heritage - interface extends interfaces (plain: extends Foo)
+(interface_declaration name: (identifier) @heritage.class
+  (extends_interfaces (type_list (type_identifier) @heritage.extends))) @heritage
+
+; Heritage - interface extends interfaces with generics (extends Foo<T>)
+(interface_declaration name: (identifier) @heritage.class
+  (extends_interfaces (type_list (generic_type (type_identifier) @heritage.extends)))) @heritage
 
 ; Type references — captures types used in field/param/return-type positions
 (field_declaration type: (type_identifier) @reference.type)
@@ -265,8 +365,9 @@ export const C_QUERIES = `
 (function_definition declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name)))) @definition.function
 
 ; Structs, Unions, Enums, Typedefs
-(struct_specifier name: (type_identifier) @name) @definition.struct
-(union_specifier name: (type_identifier) @name) @definition.union
+; Only match struct/union with a body to avoid treating forward declarations as definitions
+(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @definition.struct
+(union_specifier name: (type_identifier) @name body: (field_declaration_list)) @definition.union
 (enum_specifier name: (type_identifier) @name) @definition.enum
 (type_definition declarator: (type_identifier) @name) @definition.typedef
 
@@ -284,33 +385,85 @@ export const C_QUERIES = `
 ; Type references — captures types used in declaration/parameter positions
 (declaration type: (type_identifier) @reference.type)
 (parameter_declaration type: (type_identifier) @reference.type)
+; struct_specifier forms: e.g. "const struct Curl_protocol foo = {...}"
+(declaration type: (struct_specifier name: (type_identifier) @reference.type))
+(parameter_declaration type: (struct_specifier name: (type_identifier) @reference.type))
 `;
 // Go queries - works with tree-sitter-go
 export const GO_QUERIES = `
-; Functions & Methods
+; Functions
 (function_declaration name: (identifier) @name) @definition.function
-(method_declaration name: (field_identifier) @name) @definition.method
+
+; Methods — non-pointer receiver: func (r ReceiverType) Name(...)
+; The receiver.type capture lets the parser set container = ReceiverType so that
+; qualifiedKey becomes "ReceiverType.Name" instead of bare "Name".
+(method_declaration
+  receiver: (parameter_list (parameter_declaration
+    type: (type_identifier) @receiver.type))
+  name: (field_identifier) @name) @definition.method
+
+; Methods — pointer receiver: func (r *ReceiverType) Name(...)
+(method_declaration
+  receiver: (parameter_list (parameter_declaration
+    type: (pointer_type (type_identifier) @receiver.type)))
+  name: (field_identifier) @name) @definition.method
 
 ; Types
 (type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @definition.struct
 (type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @definition.interface
 
+; Interface method signatures — emits each method inside an interface_type as a method entity.
+; @heritage.class = interface name (used as container in index.ts via heritageClassCapture).
+; node type is method_elem in tree-sitter-go v0.21+.
+(type_declaration
+  (type_spec
+    name: (type_identifier) @heritage.class
+    type: (interface_type
+      (method_elem
+        name: (field_identifier) @name)))) @definition.method
+
 ; Imports
 (import_declaration (import_spec path: (interpreted_string_literal) @import.source)) @import
 (import_declaration (import_spec_list (import_spec path: (interpreted_string_literal) @import.source))) @import
 
-; Struct embedding (anonymous fields = inheritance)
+; Struct embedding — value: type Foo struct { Bar }
+; NOTE: no @definition.* capture here — if it were present, defCapture fires first and
+; the heritage block is never reached (early-exit in the first pass).
+; The . anchors require the type_identifier to be the FIRST and ONLY named child of
+; field_declaration, distinguishing anonymous embedded fields from named fields like:
+;   w Writer  (named field — field_identifier_list precedes type, not matched)
 (type_declaration
   (type_spec
     name: (type_identifier) @heritage.class
     type: (struct_type
       (field_declaration_list
-        (field_declaration
-          type: (type_identifier) @heritage.extends))))) @definition.struct
+        (field_declaration .
+          (type_identifier) @heritage.extends .)))))
+
+; Struct embedding — pointer: type Foo struct { *Bar }
+; The . anchor requires pointer_type to be the first named child (anonymous embedded).
+(type_declaration
+  (type_spec
+    name: (type_identifier) @heritage.class
+    type: (struct_type
+      (field_declaration_list
+        (field_declaration .
+          (pointer_type (type_identifier) @heritage.extends) .)))))
 
 ; Calls
 (call_expression function: (identifier) @call.name) @call
-(call_expression function: (selector_expression field: (field_identifier) @call.name)) @call
+; Qualified calls: pkg.Func() or localVar.Method() where the operand is a simple
+; identifier — capture it as @_qualifier so cross-file resolution uses the fully
+; qualified name "scrape.NewManager" instead of bare "NewManager", preventing
+; ambiguous same-named symbols in different packages from being collapsed.
+(call_expression function: (selector_expression
+  operand: (identifier) @_qualifier
+  field: (field_identifier) @call.name)) @call
+; Chained/complex calls: a.b.Method(), call().Method(), index[i].Method() — the
+; operand is not a simple identifier, so emit without qualifier (bare method name).
+(call_expression function: (selector_expression
+  operand: (selector_expression)
+  field: (field_identifier) @call.name)) @call
 
 ; Struct literal construction: User{Name: "Alice"}
 (composite_literal type: (type_identifier) @call.name) @call
@@ -321,6 +474,12 @@ export const GO_QUERIES = `
 ; Return types: in tree-sitter-go, return type is a direct type_identifier child of function/method
 (function_declaration result: (type_identifier) @reference.type)
 (method_declaration result: (type_identifier) @reference.type)
+
+; Pointer-type variants: e.g. opts *Options, func(*Options) *Result
+(field_declaration type: (pointer_type (type_identifier) @reference.type))
+(parameter_declaration type: (pointer_type (type_identifier) @reference.type))
+(function_declaration result: (pointer_type (type_identifier) @reference.type))
+(method_declaration result: (pointer_type (type_identifier) @reference.type))
 `;
 // C++ queries - works with tree-sitter-cpp
 export const CPP_QUERIES = `
@@ -452,8 +611,8 @@ export const CSHARP_QUERIES = `
 ; Type references — captures types used in field/param/return-type positions
 (parameter type: (identifier) @reference.type)
 (variable_declaration type: (identifier) @reference.type)
-(field_declaration type: (identifier) @reference.type)
-(method_declaration return_type: (identifier) @reference.type)
+(field_declaration (variable_declaration type: (identifier) @reference.type))
+(method_declaration returns: (identifier) @reference.type)
 `;
 // Rust queries - works with tree-sitter-rust
 export const RUST_QUERIES = `
@@ -478,7 +637,9 @@ export const RUST_QUERIES = `
 ; Calls
 (call_expression function: (identifier) @call.name) @call
 (call_expression function: (field_expression field: (field_identifier) @call.name)) @call
-(call_expression function: (scoped_identifier name: (identifier) @call.name)) @call
+(call_expression function: (scoped_identifier
+  path: (identifier) @_qualifier
+  name: (identifier) @call.name)) @call
 (call_expression function: (generic_function function: (identifier) @call.name)) @call
 
 ; Struct literal construction: User { name: value }
@@ -488,6 +649,31 @@ export const RUST_QUERIES = `
 (field_declaration type: (type_identifier) @reference.type)
 (parameter pattern: (_) type: (type_identifier) @reference.type)
 (function_item return_type: (type_identifier) @reference.type)
+
+; Wrapped type references — &Type, &mut Type
+(field_declaration type: (reference_type (type_identifier) @reference.type))
+(parameter pattern: (_) type: (reference_type (type_identifier) @reference.type))
+(function_item return_type: (reference_type (type_identifier) @reference.type))
+
+; Generic wrapper types — Box<Type>, Arc<Type>, Vec<Type>, Option<Type>, Result<Type,_>, etc.
+; Capture the type argument (inner type), not the wrapper name.
+(field_declaration type: (generic_type type_arguments: (type_arguments (type_identifier) @reference.type)))
+(parameter pattern: (_) type: (generic_type type_arguments: (type_arguments (type_identifier) @reference.type)))
+(function_item return_type: (generic_type type_arguments: (type_arguments (type_identifier) @reference.type)))
+
+; impl Trait in parameter / return positions
+(parameter pattern: (_) type: (abstract_type (type_identifier) @reference.type))
+(function_item return_type: (abstract_type (type_identifier) @reference.type))
+
+; dyn Trait — trait objects (direct: fn foo(x: dyn Trait) or field: x: dyn Trait)
+(field_declaration type: (dynamic_type (type_identifier) @reference.type))
+(parameter pattern: (_) type: (dynamic_type (type_identifier) @reference.type))
+(function_item return_type: (dynamic_type (type_identifier) @reference.type))
+
+; dyn Trait nested inside generic wrapper — Box<dyn Trait>, Arc<dyn Trait>, etc.
+(field_declaration type: (generic_type type_arguments: (type_arguments (dynamic_type (type_identifier) @reference.type))))
+(parameter pattern: (_) type: (generic_type type_arguments: (type_arguments (dynamic_type (type_identifier) @reference.type))))
+(function_item return_type: (generic_type type_arguments: (type_arguments (dynamic_type (type_identifier) @reference.type))))
 
 ; Heritage (trait implementation) — all combinations of concrete/generic trait × concrete/generic type
 (impl_item trait: (type_identifier) @heritage.trait type: (type_identifier) @heritage.class) @heritage

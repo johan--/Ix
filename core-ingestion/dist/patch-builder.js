@@ -38,10 +38,10 @@ function sourceType(filePath) {
     return 'code';
 }
 export function extractorName() {
-    return `tree-sitter/1.13`;
+    return `tree-sitter/1.18`;
 }
 /** Previous extractor versions — their patches are superseded when re-ingesting. */
-export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
+export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
 /** Compute a patchId for a (filePath, sourceHash, extractorVersion) triple. */
 function computePatchId(filePath, sourceHash, extractor) {
     return deterministicId(`${normalizePath(filePath)}:${sourceHash}:${extractor}`);
@@ -75,10 +75,16 @@ export function buildPatch(result, sourceHash, previousSourceHash) {
     // For ambiguous names (appear multiple times), falls back to the plain name
     // so that the edge still points to *something* deterministic.
     function resolveKey(name, container) {
-        const keys = nameToQKeys.get(name);
-        if (!keys || keys.length === 1)
-            return keys?.[0] ?? name;
-        // More than one entity with this name — try to pick by container
+        const rawKeys = nameToQKeys.get(name);
+        if (!rawKeys)
+            return name;
+        // Deduplicate: @overload in Python (and similar patterns in other languages)
+        // produces multiple definitions with identical qualified keys. A Set collapses
+        // these so we don't mistake three `Session.execute` overloads for ambiguity.
+        const keys = [...new Set(rawKeys)];
+        if (keys.length === 1)
+            return keys[0];
+        // More than one distinct entity with this name — try to pick by container
         if (container) {
             const qualified = `${container}.${name}`;
             if (keys.includes(qualified))
@@ -234,14 +240,14 @@ export function buildPatch(result, sourceHash, previousSourceHash) {
 // to the actual defining file for cross-file calls resolved by resolveCallEdges.
 // ---------------------------------------------------------------------------
 export function buildPatchWithResolution(result, sourceHash, resolvedEdges, previousSourceHash) {
-    // Build lookup: `${predicate}:${dstName}` → { dstFilePath, dstQualifiedKey }
+    // Build lookup: `${srcName}:${predicate}:${dstName}` → { dstFilePath, dstQualifiedKey }
     // Callers should pass only edges for this file (pre-grouped) for best performance,
     // but we still tolerate the full array for backward compatibility.
     const edgeResolution = new Map();
     for (const edge of resolvedEdges) {
         if (edge.srcFilePath !== result.filePath)
             continue;
-        edgeResolution.set(`${edge.predicate}:${edge.dstName}`, {
+        edgeResolution.set(`${edge.srcName}:${edge.predicate}:${edge.dstName}`, {
             dstFilePath: edge.dstFilePath,
             dstQualifiedKey: edge.dstQualifiedKey,
         });
@@ -259,9 +265,12 @@ export function buildPatchWithResolution(result, sourceHash, resolvedEdges, prev
         nameToQKeys.set(e.name, list);
     }
     function resolveKey(name, container) {
-        const keys = nameToQKeys.get(name);
-        if (!keys || keys.length === 1)
-            return keys?.[0] ?? name;
+        const rawKeys = nameToQKeys.get(name);
+        if (!rawKeys)
+            return name;
+        const keys = [...new Set(rawKeys)]; // deduplicate — @overload produces identical qks
+        if (keys.length === 1)
+            return keys[0];
         if (container) {
             const qualified = `${container}.${name}`;
             if (keys.includes(qualified))
@@ -355,7 +364,7 @@ export function buildPatchWithResolution(result, sourceHash, resolvedEdges, prev
             : resolveKey(r.dstName);
         // For cross-file resolved edges (CALLS, EXTENDS), use the defining file's nodeId
         let dstNodeId;
-        const resolutionKey = `${r.predicate}:${r.dstName}`;
+        const resolutionKey = `${r.srcName}:${r.predicate}:${r.dstName}`;
         if (edgeResolution.has(resolutionKey)) {
             const { dstFilePath, dstQualifiedKey } = edgeResolution.get(resolutionKey);
             dstNodeId = nodeId(dstFilePath, dstQualifiedKey);

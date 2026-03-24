@@ -160,20 +160,53 @@ const TYPE_BUILTINS = new Set([
   'int16_t', 'int32_t', 'int64_t',
 ]);
 
-// Builtins to exclude from CALLS edges
-const BUILTINS = new Set([
-  'print', 'println', 'len', 'range', 'int', 'str', 'float', 'list', 'dict',
+// Builtins to exclude from CALLS edges — split by language family to avoid
+// suppressing valid method names in other languages (e.g. `filter` is a Python
+// builtin but also a common ORM method; `warn`/`error` are JS console methods
+// but also valid Python logging method names).
+
+// Keywords and pseudo-variables that are never valid call targets in any language.
+const SHARED_BUILTINS = new Set([
+  'if', 'for', 'while', 'return', 'new', 'this', 'self',
+  'undefined', 'null', 'true', 'false',
+  'println',  // Scala/Java/Kotlin/Rust standard-output builtin — noise in any language
+]);
+
+// Python-specific builtins (bare function calls like `len(x)`, `range(n)`, etc.)
+const PYTHON_BUILTINS = new Set([
+  ...SHARED_BUILTINS,
+  'print', 'len', 'range', 'int', 'str', 'float', 'list', 'dict',
   'set', 'tuple', 'type', 'isinstance', 'super', 'property', 'enumerate',
   'zip', 'map', 'filter', 'sorted', 'any', 'all', 'min', 'max', 'sum',
+  'open', 'repr', 'abs', 'round', 'hash', 'id', 'callable', 'iter', 'next',
+  'vars', 'dir', 'getattr', 'setattr', 'hasattr', 'delattr',
+]);
+
+// JavaScript/TypeScript-specific builtins
+const JS_BUILTINS = new Set([
+  ...SHARED_BUILTINS,
   'console', 'log', 'warn', 'error', 'debug', 'info',
-  'module', 'exports', 'undefined', 'null', 'true', 'false',
-  'if', 'for', 'while', 'return', 'new', 'this', 'self',
+  'module', 'exports',
   'Promise', 'Array', 'Object', 'String', 'Number', 'Boolean', 'JSON',
   'Math', 'Date', 'Error', 'Map', 'Set', 'Symbol',
   'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
   'process', 'Buffer', 'global', 'window', 'document',
   'require', 'fetch', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
 ]);
+
+// Per-language BUILTINS lookup — falls back to shared for languages without a
+// specific set (e.g. Java, Go, Rust) so they only skip obvious non-calls.
+function builtinsForLanguage(lang: SupportedLanguages): Set<string> {
+  switch (lang) {
+    case SupportedLanguages.Python:
+      return PYTHON_BUILTINS;
+    case SupportedLanguages.JavaScript:
+    case SupportedLanguages.TypeScript:
+      return JS_BUILTINS;
+    default:
+      return SHARED_BUILTINS;
+  }
+}
 
 /** Returns true if a grammar is installed for the given file's language. */
 export function isGrammarSupported(filePath: string): boolean {
@@ -208,6 +241,45 @@ function getCachedQuery(
 }
 
 // ---------------------------------------------------------------------------
+// Rust: cfg macro unwrapping
+// ---------------------------------------------------------------------------
+
+/**
+ * Blanks out feature-gating macro wrappers in Rust source so that the items
+ * inside become visible to tree-sitter as top-level declarations.
+ *
+ * Replaces `cfg_rt! { ... }` (and similar) with the body contents in-place,
+ * preserving every character position and line number so that entity line
+ * numbers remain accurate.
+ */
+function unwrapRustCfgMacros(source: string): string {
+  const re = /\bcfg_(?:rt_multi_thread|not_rt|rt|io|time|sync|net|fs|process|signal)!\s*\{/g;
+  const chars = source.split('');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const openBrace = m.index + m[0].length - 1; // position of the `{`
+    // Find matching closing brace by counting depth
+    let depth = 0;
+    let closeBrace = -1;
+    for (let i = openBrace; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      else if (source[i] === '}') {
+        depth--;
+        if (depth === 0) { closeBrace = i; break; }
+      }
+    }
+    if (closeBrace === -1) continue;
+    // Blank out everything from start of macro name up to and including `{`
+    for (let i = m.index; i <= openBrace; i++) {
+      if (chars[i] !== '\n') chars[i] = ' ';
+    }
+    // Blank out the matching closing `}`
+    chars[closeBrace] = ' ';
+  }
+  return chars.join('');
+}
+
+// ---------------------------------------------------------------------------
 // Main parse function
 // ---------------------------------------------------------------------------
 
@@ -226,7 +298,24 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
   try {
     const parser = getParser();
     parser.setLanguage(grammar);
-    const tree = parser.parse(source, undefined, { bufferSize: source.length + 1 });
+    // tree-sitter-java cannot parse array-type annotations on varargs params
+    // (e.g. `@Nullable Object @Nullable ... args`). The second annotation causes
+    // error recovery to truncate the enclosing class_declaration, orphaning all
+    // subsequent methods. Strip any @Annotation immediately before `...` in-memory
+    // so the class body parses correctly.
+    let parseSource = language === SupportedLanguages.Java
+      ? source.replace(/@\w+\s*(?=\.\.\.)/g, '')
+      : source;
+
+    // Rust: unwrap feature-gating macros (cfg_rt! { ... }, cfg_io! { ... }, etc.)
+    // These macros are transparent pass-throughs — their bodies contain normal items
+    // that tree-sitter cannot see because they are parsed as raw token_tree nodes.
+    // We blank out the macro call and matching closing brace in-place (preserving
+    // character positions and line numbers) so the inner items become top-level.
+    if (language === SupportedLanguages.Rust) {
+      parseSource = unwrapRustCfgMacros(parseSource);
+    }
+    const tree = parser.parse(parseSource, undefined, { bufferSize: parseSource.length + 1 });
     const cacheKey = isTsx ? 'tsx' as const : language;
     const query = getCachedQuery(cacheKey, grammar, queries);
     const matches = query.matches(tree.rootNode);
@@ -259,6 +348,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const seenCalls = new Map<string, Set<string>>();
     // Track seen type references per enclosing class/file to avoid duplicate REFERENCES edges
     const seenRefs = new Map<string, Set<string>>();
+    // Python: map function name → (param name → declared type) for typed-parameter qualifier substitution
+    const paramTypeMap = new Map<string, Map<string, string>>();
+    // Python: map function name → (variable name → assigned type) for untyped-param qualifier substitution
+    const assignTypeMap = new Map<string, Map<string, string>>();
 
     // --- First pass: collect definitions ---
     for (const match of matches) {
@@ -280,8 +373,20 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         const startByte = defNode.startIndex;
         const endByte = defNode.endIndex;
 
-        // Containment: file CONTAINS or class CONTAINS
+        // Containment: file CONTAINS or class CONTAINS.
+        // For Go methods the receiver type IS the container — methods are defined
+        // outside the struct body so findEnclosing() always returns null for them.
+        // The receiver.type capture (emitted by the Go method queries) overrides this.
         const enclosing = findEnclosing(classRanges, lineStart, name);
+        const receiverCapture = match.captures.find((c: any) => c.name === 'receiver.type');
+        // heritageClassCapture is set by the Go interface method query, where @heritage.class
+        // captures the interface name and serves as the container (like receiver.type for structs).
+        const heritageClassCapture = match.captures.find((c: any) => c.name === 'heritage.class');
+        const effectiveContainer = (receiverCapture && kind === 'method')
+          ? receiverCapture.node.text
+          : (heritageClassCapture && kind === 'method')
+          ? heritageClassCapture.node.text
+          : (enclosing ?? undefined);
 
         entities.push({
           name,
@@ -289,7 +394,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
           lineStart,
           lineEnd,
           language,
-          container: enclosing ?? undefined,
+          container: effectiveContainer,
         });
 
         pendingChunks.push({
@@ -307,8 +412,8 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
           classRanges.push({ name, start: lineStart, end: lineEnd });
         }
 
-        if (enclosing) {
-          relationships.push({ srcName: enclosing, dstName: name, predicate: 'CONTAINS' });
+        if (effectiveContainer) {
+          relationships.push({ srcName: effectiveContainer, dstName: name, predicate: 'CONTAINS' });
         } else {
           relationships.push({ srcName: fileName, dstName: name, predicate: 'CONTAINS' });
         }
@@ -342,6 +447,42 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
           predicate: 'EXTENDS',
         });
         continue;
+      }
+
+      // Python typed parameters: build paramTypeMap for qualifier substitution in the second pass.
+      // Maps function name → (param name → declared type) so that e.g. `query: Query` lets us
+      // rewrite `query.filter(...)` → `Query.filter` when building effectiveCallee.
+      if (language === SupportedLanguages.Python) {
+        const typedParamScope = match.captures.find((c: any) => c.name === '_typed_param_scope');
+        const typedParamName = match.captures.find((c: any) => c.name === '_typed_param_name');
+        const typedParamType = match.captures.find((c: any) => c.name === '_typed_param_type');
+        if (typedParamScope && typedParamName && typedParamType) {
+          const funcName = typedParamScope.node.childForFieldName?.('name')?.text as string | undefined;
+          if (funcName) {
+            if (!paramTypeMap.has(funcName)) paramTypeMap.set(funcName, new Map());
+            paramTypeMap.get(funcName)!.set(typedParamName.node.text, typedParamType.node.text);
+          }
+          continue;
+        }
+
+        // Assignment tracking: x = SomeClass() or x = Model.objects.method()
+        const assignScope = match.captures.find((c: any) => c.name === '_assign_scope');
+        const assignLhs = match.captures.find((c: any) => c.name === '_assign_lhs');
+        const assignRhsType = match.captures.find((c: any) => c.name === '_assign_rhs_type');
+        if (assignScope && assignLhs && assignRhsType) {
+          // Only track PascalCase RHS names (constructors by convention).
+          // Lowercase function calls like `select(...)` or `create_engine(...)` are skipped
+          // to avoid cross-module false edges (e.g. orm.query → select.where in SQLAlchemy).
+          const rhsName = assignRhsType.node.text;
+          if (/^[A-Z]/.test(rhsName)) {
+            const funcName = assignScope.node.childForFieldName?.('name')?.text as string | undefined;
+            if (funcName) {
+              if (!assignTypeMap.has(funcName)) assignTypeMap.set(funcName, new Map());
+              assignTypeMap.get(funcName)!.set(assignLhs.node.text, rhsName);
+            }
+          }
+          continue;
+        }
       }
     }
 
@@ -408,7 +549,17 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       const callName = match.captures.find((c: any) => c.name === 'call.name');
       if (callName) {
         const callee = callName.node.text;
-        if (!callee || BUILTINS.has(callee) || callee.length <= 1) continue;
+        if (!callee || callee.length <= 1) continue;
+
+        // If a _qualifier capture is present (field_expression / stable_identifier
+        // patterns like NodeKind.Decision, or Python attribute calls like
+        // Session.execute), emit the fully qualified name so that resolution can use
+        // the qualifier to break ties between same-named symbols in different files.
+        // BUILTINS filtering is skipped for attribute calls: method names like
+        // `filter` or `map` are Python builtins when called bare, but are valid
+        // user-defined method calls when invoked as `query.filter(...)`.
+        const qualifierCapture = match.captures.find((c: any) => c.name === '_qualifier');
+        if (builtinsForLanguage(language).has(callee) && !qualifierCapture) continue;
 
         // Find enclosing function/method for the call; fall back to enclosing class
         // (e.g. calls in val/lazy val body at class level) before falling back to file.
@@ -421,14 +572,34 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
         if (!seenCalls.has(scope)) seenCalls.set(scope, new Set());
         const seen = seenCalls.get(scope)!;
 
-        // If a _qualifier capture is present (field_expression / stable_identifier
-        // patterns like NodeKind.Decision), emit the fully qualified name so that
-        // resolution can use the qualifier to break ties between same-named symbols
-        // in different files (e.g. NodeKind.Decision vs SourceType.Decision).
-        const qualifierCapture = match.captures.find((c: any) => c.name === '_qualifier');
-        const effectiveCallee = qualifierCapture
-          ? `${qualifierCapture.node.text}.${callee}`
-          : callee;
+        const effectiveCallee = (() => {
+          if (!qualifierCapture) return callee;
+          let qualifier = qualifierCapture.node.text;
+          // Python: 'self'/'cls' always refers to the enclosing class — substitute it
+          // so the edge reads 'Query.filter' instead of 'self.filter', enabling
+          // same-file resolution without type inference.
+          if (language === SupportedLanguages.Python && (qualifier === 'self' || qualifier === 'cls')) {
+            const enclosingClass = findEnclosing(classRanges, callLine, '');
+            if (enclosingClass) qualifier = enclosingClass;
+          } else if (qualifier === 'this') {
+            // JS/TS: 'this' inside a class method refers to the enclosing class.
+            // Substitute so e.g. `this.save()` → `Document.save` instead of `this.save`.
+            const enclosingClass = findEnclosing(classRanges, callLine, '');
+            if (enclosingClass) qualifier = enclosingClass;
+          } else if (language === SupportedLanguages.Python) {
+            // Typed-parameter substitution: if the qualifier is a param with a declared type,
+            // use the type name so e.g. `query.filter(...)` → `Query.filter`.
+            // Also check assignTypeMap for variables assigned from constructor/ORM calls.
+            const funcName = findEnclosingFunction(entities, callLine);
+            if (funcName) {
+              const typeForParam = paramTypeMap.get(funcName)?.get(qualifier);
+              const typeForAssign = assignTypeMap.get(funcName)?.get(qualifier);
+              if (typeForParam) qualifier = typeForParam;
+              else if (typeForAssign) qualifier = typeForAssign;
+            }
+          }
+          return `${qualifier}.${callee}`;
+        })();
 
         if (!seen.has(effectiveCallee)) {
           seen.add(effectiveCallee);
@@ -563,7 +734,17 @@ function bestQKey(
  *   - Unambiguous class method: dstQualifiedKey === 'ClassName.method'
  *   - Ambiguous (two entities share the same plain name): edge not emitted
  */
-export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
+export function resolveEdges(results: FileParseResult[], stats?: {
+  importLookups: number; transitiveLookups: number; globalFallbacks: number;
+  globalCandidateTotal: number; resolvedImport: number; resolvedTransitive: number;
+  resolvedGlobal: number; resolvedQualifier: number; skippedSameFile: number; skippedAmbiguous: number;
+}): ResolvedEdge[] {
+  // Provide a default no-op stats bag when caller passes none (backward compat).
+  if (!stats) stats = {
+    importLookups: 0, transitiveLookups: 0, globalFallbacks: 0,
+    globalCandidateTotal: 0, resolvedImport: 0, resolvedTransitive: 0,
+    resolvedGlobal: 0, resolvedQualifier: 0, skippedSameFile: 0, skippedAmbiguous: 0,
+  };
   // fileQKeys: filePath → (plainName → qualifiedKeys[])
   // Mirrors the entityQKey computation in buildPatch so nodeIds match exactly.
   const fileQKeys = new Map<string, Map<string, string[]>>();
@@ -596,6 +777,12 @@ export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
       list.push(fp);
       symbolToFiles.set(sym, list);
     }
+  }
+
+  // fileLanguage: filePath → SupportedLanguages (fast language lookup without re-calling languageFromPath)
+  const fileLanguage = new Map<string, SupportedLanguages>();
+  for (const r of results) {
+    fileLanguage.set(r.filePath, r.language);
   }
 
   // stemToFiles: basename-without-extension → filePath[]
@@ -640,6 +827,22 @@ export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
     }
   }
 
+  // goPkgDirToFiles: Go package directory name → filePath[]
+  // In Go, the last segment of an import path IS the package directory name.
+  // e.g. import "go.etcd.io/etcd/server/etcdserver" is stripped to modName "etcdserver"
+  // by the import processor; this index maps that name to all .go files in
+  // any directory named "etcdserver" within the ingested batch.
+  const goPkgDirToFiles = new Map<string, string[]>();
+  for (const r of results) {
+    if (nodePath.extname(r.filePath) !== '.go') continue;
+    const dirName = nodePath.basename(nodePath.dirname(r.filePath));
+    const list = goPkgDirToFiles.get(dirName) ?? [];
+    if (!list.includes(r.filePath)) list.push(r.filePath);
+    goPkgDirToFiles.set(dirName, list);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────
+
   /** Resolve a module name to matching file paths in the batch. */
   function modNameToFiles(modName: string, excludeFp: string): string[] {
     const fps: string[] = [];
@@ -649,7 +852,7 @@ export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
     if (stripped && stripped !== modName) candidates.push(stripped);
     // Strip file extensions so "explain.js" resolves to the "explain" stem
     // (TS/JS ESM imports use .js extensions that map to .ts source files)
-    const noExt = modName.replace(/\.(js|ts|mjs|cjs|jsx|tsx|py|scala|java)$/, '');
+    const noExt = modName.replace(/\.(js|ts|mjs|cjs|jsx|tsx|py|scala|java|c|cc|cpp|cxx|h|hh|hpp|hxx)$/, '');
     if (noExt !== modName && noExt && !candidates.includes(noExt)) candidates.push(noExt);
     // For dotted paths (Scala/Java: 'ix.memory.model.Edge'), also try last segment
     const lastDot = modName.lastIndexOf('.');
@@ -669,13 +872,125 @@ export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
     for (const fp of packageToFiles.get(modName) ?? []) {
       if (fp !== excludeFp && !fps.includes(fp)) fps.push(fp);
     }
+    // Go package directory resolution: "etcdserver" → all .go files in .../etcdserver/
+    // The last segment of a Go import path is the package directory name, not a file stem.
+    for (const fp of goPkgDirToFiles.get(modName) ?? []) {
+      if (fp !== excludeFp && !fps.includes(fp)) fps.push(fp);
+    }
     return fps;
   }
+
+  function tokenizeSymbolParts(value: string): string[] {
+    return value
+      .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  const GENERIC_RESOLUTION_TOKENS = new Set([
+    'run', 'job', 'file', 'files', 'table', 'tables', 'output', 'outputs',
+    'input', 'inputs', 'background',
+  ]);
+
+  function candidateStem(filePath: string): string {
+    return nodePath.basename(filePath, nodePath.extname(filePath)).toLowerCase();
+  }
+
+  function pickCallerAlignedCandidate(
+    matches: string[],
+    srcName: string,
+    dstName: string,
+  ): { chosen: string | null; best: Array<{ fp: string; overlap: number }> } | null {
+    if (matches.length === 0) return null;
+    const srcTokens = new Set(
+      tokenizeSymbolParts(srcName).filter(token => !GENERIC_RESOLUTION_TOKENS.has(token)),
+    );
+    const overlapScores = matches.map(fp => {
+      const qKeys = fileQKeys.get(fp)?.get(dstName) ?? [];
+      const candidateTokens = new Set<string>(tokenizeSymbolParts(candidateStem(fp)));
+      for (const qKey of qKeys) {
+        for (const token of tokenizeSymbolParts(qKey)) candidateTokens.add(token);
+      }
+      let overlap = 0;
+      for (const token of candidateTokens) {
+        if (!GENERIC_RESOLUTION_TOKENS.has(token) && srcTokens.has(token)) overlap++;
+      }
+      return { fp, overlap };
+    });
+    const maxOverlap = Math.max(...overlapScores.map(x => x.overlap));
+    if (maxOverlap <= 0) return null;
+    const bestMatches = overlapScores.filter(x => x.overlap === maxOverlap);
+    return {
+      chosen: bestMatches.length === 1 ? bestMatches[0].fp : null,
+      best: bestMatches,
+    };
+  }
+
+  function narrowCCandidates(
+    matches: string[],
+    srcFilePath: string,
+    srcLanguage: SupportedLanguages,
+    srcName: string,
+    dstName: string,
+  ): string[] {
+    if (matches.length <= 1) return matches;
+
+    // C# partial class narrowing: multiple files may define the same class via
+    // partial class (e.g. JsonReader.cs + JsonReader.Async.cs both define JsonReader).
+    // Prefer the canonical file whose stem exactly matches the destination class name
+    // over variant files that have additional dot-segments in the stem.
+    if (srcLanguage === SupportedLanguages.CSharp) {
+      const dstNameLower = dstName.toLowerCase();
+      const canonicalMatches = matches.filter(fp => candidateStem(fp) === dstNameLower);
+      if (canonicalMatches.length === 1) return canonicalMatches;
+    }
+
+    if (srcLanguage !== SupportedLanguages.C && srcLanguage !== SupportedLanguages.CPlusPlus) return matches;
+
+    let narrowed = matches;
+    const implExts = ['.c', '.cpp', '.cc', '.cxx'];
+    const implMatches = narrowed.filter(fp => implExts.some(ext => fp.endsWith(ext)));
+    if (implMatches.length === 1) narrowed = implMatches;
+
+    if (narrowed.length <= 1) return narrowed;
+
+    const srcParts = srcFilePath.replace(/\\/g, '/').split('/');
+    const withProximity = narrowed.map(fp => {
+      const fpParts = fp.replace(/\\/g, '/').split('/');
+      let common = 0;
+      while (common < srcParts.length && common < fpParts.length && srcParts[common] === fpParts[common]) {
+        common++;
+      }
+      return { fp, common };
+    });
+    const maxCommon = Math.max(...withProximity.map(x => x.common));
+    const proximityMatches = withProximity.filter(x => x.common === maxCommon).map(x => x.fp);
+    if (proximityMatches.length === 1) return proximityMatches;
+
+    const callerAligned = pickCallerAlignedCandidate(narrowed, srcName, dstName);
+    if (callerAligned?.chosen) return [callerAligned.chosen];
+
+    const callerAlignedCandidates = pickCallerAlignedCandidate(matches, srcName, dstName);
+    if (callerAlignedCandidates?.best) {
+      const implAlignedMatches = callerAlignedCandidates.best
+        .map(match => match.fp)
+        .filter(fp => ['.c', '.cpp', '.cc', '.cxx'].some(ext => fp.endsWith(ext)));
+      if (implAlignedMatches.length === 1) return implAlignedMatches;
+    }
+
+    return narrowed;
+  }
+
+  // ── Main resolution loop ───────────────────────────────────────────
+
 
   const resolved: ResolvedEdge[] = [];
 
   for (const result of results) {
     const srcFilePath = result.filePath;
+    const srcLanguage = result.language;
     const srcSymbols = fileHasSymbol.get(srcFilePath)!;
 
     // Build the set of file paths this file explicitly imports.
@@ -779,44 +1094,57 @@ export function resolveEdges(results: FileParseResult[]): ResolvedEdge[] {
       for (const fp of importedFilePaths) {
         if (fileHasSymbol.get(fp)?.has(dstName)) importMatches.push(fp);
       }
+      const narrowedImportMatches = narrowCCandidates(importMatches, srcFilePath, srcLanguage, srcName, dstName);
 
-      if (importMatches.length === 1) {
-        const fp = importMatches[0];
+      if (narrowedImportMatches.length === 1) {
+        const fp = narrowedImportMatches[0];
         const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.9 });
         continue;
       }
-      if (importMatches.length > 1) continue; // ambiguous file — do not emit
-
       // Tier 2.5: transitive import-scoped (confidence 0.8) — one re-export hop away
       const transitiveMatches: string[] = [];
       for (const fp of transitiveFilePaths) {
         if (fileHasSymbol.get(fp)?.has(dstName)) transitiveMatches.push(fp);
       }
+      const narrowedTransitiveMatches = narrowCCandidates(transitiveMatches, srcFilePath, srcLanguage, srcName, dstName);
 
-      if (transitiveMatches.length === 1) {
-        const fp = transitiveMatches[0];
+      if (narrowedTransitiveMatches.length === 1) {
+        const fp = narrowedTransitiveMatches[0];
         const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
         if (dstQualifiedKey === null) continue;
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.8 });
         continue;
       }
-      if (transitiveMatches.length > 1) continue; // ambiguous — do not emit
+      // Tier 3: global fallback (confidence 0.5) — uses inverted symbol index
+      // instead of scanning all files.
+      stats.globalFallbacks++;
+      const candidates = symbolToFiles.get(dstName) ?? [];
+      let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage);
+      const importHint = pickCallerAlignedCandidate(importMatches, srcName, dstName)?.chosen
+        ?? pickCallerAlignedCandidate(transitiveMatches, srcName, dstName)?.chosen;
+      if (importHint) {
+        const hintedStem = candidateStem(importHint);
+        const stemMatches = globalMatches.filter(fp => candidateStem(fp) === hintedStem);
+        if (stemMatches.length > 0) globalMatches = stemMatches;
+      }
+      stats.globalCandidateTotal += globalMatches.length;
 
-      // Tier 3: global fallback (confidence 0.5) — exactly one other file defines it
-      // Only match files in the same language as the caller to avoid cross-language false positives.
-      const srcLanguage = result.language;
-      const globalMatches = (symbolToFiles.get(dstName) ?? [])
-        .filter(fp => fp !== srcFilePath && languageFromPath(fp) === srcLanguage);
+      const resolvedMatches = narrowCCandidates(globalMatches, srcFilePath, srcLanguage, srcName, dstName);
 
-      if (globalMatches.length === 1) {
-        const fp = globalMatches[0];
+      if (resolvedMatches.length === 1) {
+        const fp = resolvedMatches[0];
         const dstQualifiedKey = bestQKey(fileQKeys, fp, dstName);
         if (dstQualifiedKey === null) continue; // ambiguous — do not emit bad nodeId
         resolved.push({ srcFilePath, srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.5 });
+        stats.resolvedGlobal++;
+        continue;
       }
-      // 0 or >1 global matches — leave as dangling edge, do not emit
+      if (narrowedImportMatches.length > 1 || narrowedTransitiveMatches.length > 1 || resolvedMatches.length > 1) {
+        stats.skippedAmbiguous++;
+      }
+      // 0 or >1 matches after all tiers — leave as dangling edge, do not emit
     }
   }
 

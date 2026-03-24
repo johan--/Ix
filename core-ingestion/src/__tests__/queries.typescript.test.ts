@@ -50,4 +50,33 @@ describe('TypeScript queries', () => {
       predicate: 'CALLS',
     });
   });
+
+  it('substitutes this → enclosing class for this.method() calls', () => {
+    const result = parseFile(
+      '/repo/model.ts',
+      `
+        class Document {
+          save() {
+            this.validate()
+            this.emit('save')
+          }
+          validate() {}
+        }
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    // this.validate() inside Document.save should produce Document.validate
+    expect(result!.relationships).toContainEqual({
+      srcName: 'Document.save',
+      dstName: 'Document.validate',
+      predicate: 'CALLS',
+    });
+    // this.emit() likewise
+    expect(result!.relationships).toContainEqual({
+      srcName: 'Document.save',
+      dstName: 'Document.emit',
+      predicate: 'CALLS',
+    });
+  });
 });

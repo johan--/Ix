@@ -31,6 +31,33 @@ const SUPPORTED_EXTENSIONS = new Set([
   '.scala', '.sc',
 ]);
 
+// ---------------------------------------------------------------------------
+// Language filter helpers
+// ---------------------------------------------------------------------------
+
+/** Normalise user-supplied language names to their canonical enum values. */
+const LANG_ALIASES: Record<string, string> = {
+  'c++': 'cpp',
+  'cplusplus': 'cpp',
+  'c#': 'csharp',
+  'cs': 'csharp',
+  'js': 'javascript',
+  'ts': 'typescript',
+  'py': 'python',
+  'rb': 'ruby',
+  'rs': 'rust',
+  'kt': 'kotlin',
+};
+
+function parseLangs(raw: string): Set<string> {
+  return new Set(
+    raw.split(',')
+      .map(s => s.trim().toLowerCase())
+      .map(s => LANG_ALIASES[s] ?? s)
+      .filter(Boolean),
+  );
+}
+
 const IGNORE_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'target', '.next',
   '.cache', '__pycache__', '.ix', '.claude', '.gitnexus',
@@ -137,10 +164,11 @@ export function registerIngestCommand(program: Command): void {
     .option('--format <fmt>', 'Output format (text|json)', 'text')
     .option('--root <dir>', 'Workspace root directory')
     .option('--debug', 'Show phase timing breakdown', false)
-    .addHelpText('after', '\nExamples:\n  ix ingest ./src\n  ix ingest --path ./src --force\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx')
+    .option('--lang <langs>', 'Comma-separated languages to include (e.g. cpp,c or typescript). Aliases: c++=cpp, c#=csharp, py=python, ts=typescript, js=javascript')
+    .addHelpText('after', '\nExamples:\n  ix ingest ./src\n  ix ingest --path ./src --force\n  ix ingest --path ./rocksdb --lang cpp,c\n  ix ingest --github owner/repo\n  ix ingest --github owner/repo --since 2026-01-01 --limit 20 --format json\n  ix ingest --github owner/repo --token ghp_xxxx')
     .action(async (positionalPath: string | undefined, opts: {
       path?: string; recursive?: boolean; force?: boolean; github?: string; token?: string;
-      since?: string; limit: string; format: string; root?: string; debug?: boolean;
+      since?: string; limit: string; format: string; root?: string; debug?: boolean; lang?: string;
     }) => {
       const effectivePath = positionalPath ?? opts.path;
       if (opts.github) {
@@ -160,10 +188,14 @@ export function registerIngestCommand(program: Command): void {
 
 export async function ingestFiles(
   path: string,
-  opts: { recursive?: boolean; force?: boolean; format: string; root?: string; debug?: boolean; printSummary?: boolean }
+  opts: { recursive?: boolean; force?: boolean; format: string; root?: string; debug?: boolean; printSummary?: boolean; lang?: string }
 ): Promise<void> {
   const debug = opts.debug || process.env.IX_DEBUG === '1';
   const trueStart = performance.now();
+
+  const [{ parseFile, resolveEdges, isGrammarSupported }, { buildPatchWithResolution }, { languageFromPath }] = await loadIngestionModules();
+  const moduleLoadMs = Math.round(performance.now() - trueStart);
+
 
   const resolvedPath = nodePath.isAbsolute(path)
     ? path
@@ -207,6 +239,14 @@ export async function ingestFiles(
 
   try {
     // Phase: discover files
+    const langFilter = opts.lang ? parseLangs(opts.lang) : null;
+    const supportsFile = (fileName: string): boolean => {
+      if (!isGrammarSupported(fileName)) return false;
+      if (!langFilter) return true;
+      const lang = languageFromPath(fileName);
+      return lang !== null && langFilter.has(lang);
+    };
+
     const stat = fs.statSync(resolvedPath);
     const filePaths: string[] = stat.isFile()
       ? (SUPPORTED_EXTENSIONS.has(nodePath.extname(resolvedPath)) ? [resolvedPath] : [])
