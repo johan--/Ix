@@ -11,7 +11,6 @@ import org.http4s.dsl.io._
 import ix.memory.conflict.ConflictService
 import ix.memory.context.ContextService
 import ix.memory.db.{ArangoClient, BulkWriteApi, GraphQueryApi, GraphWriteApi}
-import ix.memory.ingestion.{BulkIngestionService, IngestionService}
 import ix.memory.map.MapService
 import ix.memory.smell.SmellService
 import ix.memory.subsystem.SubsystemScoringService
@@ -20,8 +19,6 @@ object Routes {
 
   def all(
     contextService:       ContextService,
-    ingestionService:     IngestionService,
-    bulkIngestionService: BulkIngestionService,
     queryApi:             GraphQueryApi,
     writeApi:             GraphWriteApi,
     conflictService:      ConflictService,
@@ -38,7 +35,6 @@ object Routes {
     }
 
     val contextRoutes       = new ContextRoutes(contextService).routes
-    val ingestionRoutes     = new IngestionRoutes(ingestionService, bulkIngestionService).routes
     val entityRoutes        = new EntityRoutes(queryApi).routes
     val diffRoutes          = new DiffRoutes(queryApi).routes
     val conflictRoutes      = new ConflictRoutes(conflictService).routes
@@ -59,7 +55,7 @@ object Routes {
     val smellRoutes             = new SmellRoutes(smellService).routes
     val subsystemRoutes         = new SubsystemRoutes(subsystemService, mapService).routes
 
-    health <+> contextRoutes <+> ingestionRoutes <+> entityRoutes <+>
+    health <+> contextRoutes <+> entityRoutes <+>
       diffRoutes <+> conflictRoutes <+> decideRoutes <+> searchRoutes <+>
       truthRoutes <+> patchRoutes <+> decisionListRoutes <+> expandRoutes <+>
       statsRoutes <+> patchCommitRoutes <+> listRoutes <+> goalRoutes <+>

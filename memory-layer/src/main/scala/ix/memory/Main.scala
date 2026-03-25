@@ -9,7 +9,6 @@ import ix.memory.api.Routes
 import ix.memory.conflict.ConflictService
 import ix.memory.context._
 import ix.memory.db._
-import ix.memory.ingestion._
 import ix.memory.map.MapService
 import ix.memory.smell.SmellService
 import ix.memory.subsystem.SubsystemScoringService
@@ -33,10 +32,7 @@ object Main extends IOApp.Simple {
       queryApi     = new ArangoGraphQueryApi(client)
 
       // 3. Services
-      parserRouter         = new ParserRouter()
-      ingestionService     = new IngestionService(parserRouter, writeApi, queryApi)
       bulkWriteApi         = new BulkWriteApi(client)
-      bulkIngestionService = new BulkIngestionService(parserRouter, bulkWriteApi, queryApi)
       seeder           = new GraphSeeder(queryApi)
       expander         = new GraphExpander(queryApi)
       claimCollector   = new ClaimCollector(queryApi)
@@ -50,7 +46,7 @@ object Main extends IOApp.Simple {
       subsystemService = new SubsystemScoringService(client, writeApi, mapService)
 
       // 4. HTTP routes
-      routes = Routes.all(contextService, ingestionService, bulkIngestionService, queryApi, writeApi, conflictService, client, mapService, bulkWriteApi, smellService, subsystemService)
+      routes = Routes.all(contextService, queryApi, writeApi, conflictService, client, mapService, bulkWriteApi, smellService, subsystemService)
 
       // 5. Server
       server <- EmberServerBuilder
