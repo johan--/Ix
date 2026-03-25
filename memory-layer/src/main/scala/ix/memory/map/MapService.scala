@@ -283,56 +283,17 @@ class MapService(
 
           val mySegs    = dirSegs(myPaths)
           val otherSegs = dirSegs(otherPaths)
-          val minExclCoverage = math.max(2, r.memberFiles.size * 0.20).toInt
-          val exclusive = (mySegs -- otherSegs)
-            .filterNot(LabelNoiseTokens.contains)
-            // Only use a segment as a discriminator if it covers ≥20% of the cluster's files.
-            // This prevents a low-frequency deep segment (e.g. "dummy" in 7/45 files) from
-            // winning over segments that actually characterise the majority of the cluster.
-            .filter { seg =>
-              myPaths.count(p =>
-                p.split("[/\\\\]").dropRight(1).exists(_.equalsIgnoreCase(seg))
-              ) >= minExclCoverage
+          val exclusive = (mySegs -- otherSegs).filterNot(LabelNoiseTokens.contains)
+
+          // Prefer shorter tokens (more likely to be a meaningful module name).
+          // Fallback: rank by size — largest keeps the clean label, smaller ones get "(2)", "(3)", etc.
+          val suffix = exclusive.toVector.sortBy(s => (s.length, s)).headOption
+            .map(s => s" / ${s.capitalize}")
+            .getOrElse {
+              val rank = group.sortBy(-_.memberFiles.size).indexWhere(_.id == r.id) + 1
+              if (rank <= 1) "" else s" ($rank)"
             }
-
-          // Prefer shorter tokens (more likely to be a meaningful module name)
-          exclusive.toVector.sortBy(s => (s.length, s)).headOption match {
-            case Some(seg) =>
-              r.copy(label = r.label + s" / ${seg.capitalize}")
-            case None =>
-              // No exclusive directory found (cross-cutting clusters in the same label group
-              // have already claimed all of our directory segments).
-              // Fall back to the dominant directory within THIS cluster as a full label
-              // replacement — not a suffix — so we don't collide with the parent system name.
-              // Strip the common absolute prefix and apply depth weighting (same as inferLabel
-              // Strategy 2) so that deeper, more specific directory segments score higher.
-              val strippedPaths = myPaths.toSeq.map { p =>
-                val segs = p.split("[/\\\\]")
-                if (commonPfxLen > 0 && commonPfxLen < segs.length) segs.drop(commonPfxLen)
-                else segs
-              }
-              val dirsWithDepth: Seq[(Int, String)] = strippedPaths.flatMap { segs =>
-                segs.dropRight(1).zipWithIndex
-                  .filterNot { case (s, _) => LabelNoiseTokens.contains(s.toLowerCase) || s.isEmpty }
-                  .map { case (s, i) => (i, s) }
-              }
-              val maxD = dirsWithDepth.map(_._1).maxOption.getOrElse(1).toDouble.max(1.0)
-              val candidateSegments = dirsWithDepth.groupBy(_._2)
-                // Skip the base label itself — we need what distinguishes this cluster *within*
-                // the label group, not the project/package name that all siblings share.
-                .filterNot { case (seg, _) => seg.equalsIgnoreCase(r.label) }
-
-              // Score all candidate segments by frequency × depth-weight.
-              // No coverage floor here — depth-weighting already favours specific segments,
-              // and imposing a 20% minimum causes large spread-out clusters to fall back to
-              // the useless "(Nf)" label when files are spread across many subdirectories.
-              val scored = candidateSegments
-                .map     { case (seg, entries) =>
-                  seg -> entries.length * (1.0 + entries.map(_._1 / maxD).sum / entries.length)
-                }
-              val dominant = scored.maxByOption(_._2).map(_._1.capitalize)
-              r.copy(label = dominant.getOrElse(r.label + s" (${r.memberFiles.size}f)"))
-          }
+          r.copy(label = r.label + suffix)
         case None => r
       }
     }
