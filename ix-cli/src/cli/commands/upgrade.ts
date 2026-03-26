@@ -201,7 +201,7 @@ export function registerUpgradeCommand(program: Command): void {
         process.exit(1);
       }
 
-      // Update the shim to point to the newly installed binary
+      // On Windows, update the shim to point to the new versioned directory
       if (isWindows) {
         const shimPath = join(homedir(), ".local", "bin", "ix");
         const jsPathWin = join(installDir, `ix-${latest}-${platform}`, "cli", "dist", "cli", "main.js");
@@ -211,19 +211,6 @@ export function registerUpgradeCommand(program: Command): void {
         } catch { /* use windows path */ }
         if (existsSync(shimPath)) {
           writeFileSync(shimPath, `#!/usr/bin/env bash\nexec node "${jsPath}" "$@"\n`);
-        }
-      } else {
-        const binaryPath = join(installDir, "ix");
-        const shimLocations = [
-          join(homedir(), ".local", "bin", "ix"),
-          "/usr/local/bin/ix",
-        ];
-        for (const shimPath of shimLocations) {
-          if (existsSync(shimPath)) {
-            writeFileSync(shimPath, `#!/usr/bin/env bash\nexec "${binaryPath}" "$@"\n`);
-            try { execFileSync("chmod", ["+x", shimPath], { stdio: "ignore" }); } catch { /* ignore */ }
-            break;
-          }
         }
       }
 
