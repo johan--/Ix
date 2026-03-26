@@ -171,7 +171,17 @@ export class IxClient {
   }
 
   async commitPatch(patch: GraphPatchPayload): Promise<PatchCommitResult> {
-    return this.post("/v1/patch", patch);
+    const resp = await fetch(`${this.endpoint}/v1/patch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+      signal: AbortSignal.timeout(5 * 60 * 1000), // 5 min — matches commitPatchBulk
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<PatchCommitResult>;
   }
 
   async hasIngestBaseline(): Promise<boolean> {
@@ -203,7 +213,17 @@ export class IxClient {
   }
 
   async commitPatchBulk(patches: GraphPatchPayload[]): Promise<PatchCommitResult> {
-    return this.post<PatchCommitResult>('/v1/patches/bulk', { patches });
+    const resp = await fetch(`${this.endpoint}/v1/patches/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patches }),
+      signal: AbortSignal.timeout(5 * 60 * 1000), // 5 min — prevents hang when k8s ingress closes idle connections
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<PatchCommitResult>;
   }
 
   async runSmells(opts?: {
