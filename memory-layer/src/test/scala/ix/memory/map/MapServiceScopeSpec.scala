@@ -19,7 +19,7 @@ class MapServiceScopeSpec extends AnyFlatSpec with Matchers {
 
     val map = ArchitectureMap(
       regions = Vector(context, apiSubsystem, apiModule, apiClient),
-      edges = Vector.empty,
+
       fileCount = 257,
       mapRev = 42L
     )
@@ -39,7 +39,7 @@ class MapServiceScopeSpec extends AnyFlatSpec with Matchers {
 
     val map = ArchitectureMap(
       regions = Vector(system, subsystem, moduleA, moduleB, moduleC),
-      edges = Vector.empty,
+
       fileCount = 140,
       mapRev = 42L
     )
