@@ -96,10 +96,15 @@ class BulkWriteApi(client: ArangoClient) {
         else timedUnit(tombstoneExistingNodes(logicalIds, newRev))
                .both(timedUnit(retireOldClaims(fileBatches, newRev)))
       (tombstoneMs: Long, retireClaimsMs: Long) = tombstoneAndRetireMs
-      insertNodesMs  <- insertCollectionChunked("nodes", allNodes, MaxNodeDocs)(docs => client.bulkInsert("nodes", docs))
-      insertEdgesMs  <- insertCollectionChunked("edges", allEdges, MaxEdgeDocs)(docs => client.bulkInsertEdges("edges", docs))
-      insertClaimsMs <- insertCollectionChunked("claims", allClaims, MaxClaimDocs)(docs => client.bulkInsert("claims", docs))
-      insertPatchesMs <- insertCollectionChunked("patches", allPatches, MaxPatchDocs)(docs => client.bulkInsert("patches", docs))
+      // Run all four collection inserts concurrently — they write to independent collections
+      // with no referential-integrity enforcement between them. Wall time drops from the
+      // sum of all four to the max of any one (typically nodes or edges).
+      allInsertMs <- insertCollectionChunked("nodes", allNodes, MaxNodeDocs)(docs => client.bulkInsert("nodes", docs))
+                       .both(insertCollectionChunked("edges", allEdges, MaxEdgeDocs)(docs => client.bulkInsertEdges("edges", docs)))
+                       .both(insertCollectionChunked("claims", allClaims, MaxClaimDocs)(docs => client.bulkInsert("claims", docs)))
+                       .both(insertCollectionChunked("patches", allPatches, MaxPatchDocs)(docs => client.bulkInsert("patches", docs)))
+                       .map { case (((n, e), c), p) => (n, e, c, p) }
+      (insertNodesMs, insertEdgesMs, insertClaimsMs, insertPatchesMs) = allInsertMs
       updateRevMs    <- timedUnit(updateRevision(newRev))
       totalMs = buildDocsMs + tombstoneMs + retireClaimsMs + insertNodesMs + insertEdgesMs + insertClaimsMs + insertPatchesMs + updateRevMs
       _ <- logChunkTiming(
@@ -372,11 +377,68 @@ case class FileBatch(
     }
 
   def patchDocument(rev: Long): java.util.Map[String, AnyRef] = {
+    val source = new java.util.HashMap[String, AnyRef]()
+    source.put("uri", patch.source.uri)
+    source.put("sourceHash", patch.source.sourceHash.orNull)
+    source.put("extractor", patch.source.extractor)
+    source.put("sourceType", patch.source.sourceType.asJson.asString.getOrElse(patch.source.sourceType.toString))
+
+    val replaces = new java.util.ArrayList[String](patch.replaces.size)
+    patch.replaces.foreach(id => replaces.add(id.value.toString))
+
+    val entityIds = new java.util.LinkedHashSet[String]()
+    var nodeOpCount = 0
+    var edgeOpCount = 0
+    var claimOpCount = 0
+    patch.ops.foreach {
+      case PatchOp.UpsertNode(id, _, _, _) =>
+        nodeOpCount += 1
+        entityIds.add(id.value.toString)
+      case PatchOp.DeleteNode(id) =>
+        nodeOpCount += 1
+        entityIds.add(id.value.toString)
+      case PatchOp.UpsertEdge(id, _, _, _, _) =>
+        edgeOpCount += 1
+        entityIds.add(id.value.toString)
+      case PatchOp.DeleteEdge(id) =>
+        edgeOpCount += 1
+        entityIds.add(id.value.toString)
+      case PatchOp.AssertClaim(entityId, _, _, _, _) =>
+        claimOpCount += 1
+        entityIds.add(entityId.value.toString)
+      case PatchOp.RetractClaim(claimId) =>
+        claimOpCount += 1
+        entityIds.add(claimId.value.toString)
+    }
+
+    val entityIdList = new java.util.ArrayList[String](entityIds.size)
+    val entityIdIter = entityIds.iterator()
+    while (entityIdIter.hasNext) {
+      entityIdList.add(entityIdIter.next())
+    }
+
+    val data = new java.util.HashMap[String, AnyRef]()
+    data.put("patchId", patch.patchId.value.toString)
+    data.put("actor", patch.actor)
+    data.put("timestamp", patch.timestamp.toString)
+    data.put("source", source)
+    data.put("baseRev", Long.box(patch.baseRev.value))
+    data.put("replaces", replaces)
+    data.put("intent", patch.intent.orNull)
+    data.put("entityIds", entityIdList)
+    data.put("opCount", Int.box(patch.ops.size))
+    data.put("nodeOpCount", Int.box(nodeOpCount))
+    data.put("edgeOpCount", Int.box(edgeOpCount))
+    data.put("claimOpCount", Int.box(claimOpCount))
+
     val doc = new java.util.HashMap[String, AnyRef]()
     doc.put("_key", patch.patchId.value.toString)
     doc.put("patch_id", patch.patchId.value.toString)
     doc.put("rev", Long.box(rev))
-    doc.put("data", jsonToJava(patch.asJson))
+    // Bulk ingest only needs patch metadata plus touched-entity IDs for provenance
+    // and source-hash lookups. Storing full ops here duplicates the graph payload
+    // and significantly inflates Kubernetes save latency.
+    doc.put("data", data)
     doc: java.util.Map[String, AnyRef]
   }
 }

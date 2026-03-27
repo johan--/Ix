@@ -221,6 +221,38 @@ class RoutesSpec extends AsyncFlatSpec with AsyncIOSpec with Matchers with TestD
     }
   }
 
+  it should "return provenance chain for entity after bulk commit" in {
+    clientResource.use { client =>
+      val writeApi     = new ArangoGraphWriteApi(client)
+      val queryApi     = new ArangoGraphQueryApi(client)
+      val bulkWriteApi = new BulkWriteApi(client)
+      val app          = buildRoutes(client, writeApi, queryApi)
+      val nodeId       = NodeId(UUID.randomUUID())
+      val patch        = makePatch(ops = Vector(PatchOp.UpsertNode(nodeId, NodeKind.Function, "bulk_prov_func", Map.empty[String, Json])))
+      val provenance   = new java.util.HashMap[String, AnyRef]()
+      provenance.put("source_uri", patch.source.uri)
+      provenance.put("source_hash", patch.source.sourceHash.orNull)
+      provenance.put("extractor", patch.source.extractor)
+      provenance.put("source_type", patch.source.sourceType.asJson.asString.getOrElse("code"))
+      provenance.put("observed_at", patch.timestamp.toString)
+
+      for {
+        _    <- client.ensureSchema()
+        _    <- cleanDatabase(client)
+        _    <- bulkWriteApi.commitBatchChunked(
+                  Vector(FileBatch(patch.source.uri, patch.source.sourceHash, patch, provenance)),
+                  baseRev = 0L
+                )
+        resp <- app.run(Request[IO](Method.POST, Uri.unsafeFromString(s"/v1/provenance/${nodeId.value}")))
+        body <- resp.as[Json]
+      } yield {
+        resp.status shouldBe Status.Ok
+        body.hcursor.downField("entityId").as[String] shouldBe Right(nodeId.value.toString)
+        body.hcursor.downField("chain").focus.flatMap(_.asArray).exists(_.nonEmpty) shouldBe true
+      }
+    }
+  }
+
   it should "create a decision node via POST /v1/decide" in {
     clientResource.use { client =>
       val app = buildRoutes(client, new ArangoGraphWriteApi(client), new ArangoGraphQueryApi(client))

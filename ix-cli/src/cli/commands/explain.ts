@@ -52,7 +52,7 @@ export function registerExplainCommand(program: Command): void {
         console.log(JSON.stringify(output, null, 2));
       } else {
         if (facts.stale) {
-          renderWarning("Source has changed since last ingest. Run ix ingest to update.");
+          renderWarning("Source has changed since last ingest. Run ix map to update.");
         }
 
         renderSection("Explanation");
@@ -213,7 +213,7 @@ async function rawExplain(
     }
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (stale) renderWarning("Source has changed since last ingest. Run ix ingest to update.");
+    if (stale) renderWarning("Source has changed since last ingest. Run ix map to update.");
     formatExplain(result, "text");
   }
 }

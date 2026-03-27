@@ -84,6 +84,7 @@ class ArangoClient private (db: ArangoDatabase) {
       val opts = new DocumentCreateOptions()
         .overwriteMode(OverwriteMode.valueOf(overwriteMode))
         .waitForSync(false)
+        .silent(true)
       val docs = new java.util.ArrayList[java.util.Map[String, AnyRef]](documents.size)
       documents.foreach(docs.add)
       val result = db.collection(collection).insertDocuments(docs, opts)
@@ -243,7 +244,7 @@ object ArangoClient {
           .host(host, port)
           .user(user)
           .password(if (password.isEmpty) null else password)
-          .maxConnections(8)
+          .maxConnections(16)
           .build()
         val existingDbs = arango.getDatabases.asScala.toSet
         if (!existingDbs.contains(database)) {

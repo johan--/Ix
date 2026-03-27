@@ -219,7 +219,7 @@ function outputLocate(output: LocateOutput, symbol: string, format: string): voi
     return;
   }
 
-  if (output.stale) renderWarning("Some results may be stale. Run ix ingest to update.");
+  if (output.stale) renderWarning("Some results may be stale. Run ix map to update.");
 
   if (!output.resolvedTarget) {
     stderr(`No graph entity found for "${symbol}".`);

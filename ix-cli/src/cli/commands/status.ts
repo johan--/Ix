@@ -51,7 +51,7 @@ export function registerStatusCommand(program: Command): void {
               if (staleInfo.staleFiles > staleInfo.sampleChangedFiles.length) {
                 renderNote(`... and ${staleInfo.staleFiles - staleInfo.sampleChangedFiles.length} more`);
               }
-              renderNote("Run ix ingest to update.");
+              renderNote("Run ix map to update.");
             } else {
               renderSuccess("Graph is up to date.");
             }

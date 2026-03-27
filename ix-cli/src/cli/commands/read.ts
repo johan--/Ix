@@ -60,7 +60,7 @@ function outputResult(result: ReadResult, format: string): void {
   if (format === "json") {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    if (result.stale) stderr(chalk.yellow("⚠ File has changed since last ingest. Run ix ingest to update.\n"));
+    if (result.stale) stderr(chalk.yellow("⚠ File has changed since last ingest. Run ix map to update.\n"));
     if (result.targetType === "symbol" || result.targetType === "filename-match") {
       stderr(chalk.dim(`  ${result.path}:${result.lineStart}-${result.lineEnd}\n`));
     }

@@ -308,7 +308,8 @@ class ArangoGraphQueryApi(client: ArangoClient) extends GraphQueryApi {
     val nodeIdStr = entityId.value.toString
     client.query(
       """FOR p IN patches
-        |  FILTER LENGTH(
+        |  FILTER @nodeId IN (IS_ARRAY(p.data.entityIds) ? p.data.entityIds : [])
+        |    OR LENGTH(
         |    FOR op IN (IS_ARRAY(p.data.ops) ? p.data.ops : [])
         |      FILTER op.id == @nodeId OR op.entityId == @nodeId
         |      RETURN 1

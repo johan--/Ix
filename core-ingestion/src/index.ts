@@ -283,7 +283,7 @@ function unwrapRustCfgMacros(source: string): string {
 // Main parse function
 // ---------------------------------------------------------------------------
 
-export function parseFile(filePath: string, source: string): FileParseResult | null {
+export function parseFile(filePath: string, source: string, opts?: { emitChunks?: boolean }): FileParseResult | null {
   const language = languageFromPath(filePath);
   if (!language) return null;
 
@@ -629,28 +629,30 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       }
     }
 
-    for (const pendingChunk of pendingChunks) {
-      const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
-      const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
-      chunks.push({
-        ...pendingChunk,
-        contentHash,
-      });
-    }
+    if (opts?.emitChunks !== false) {
+      for (const pendingChunk of pendingChunks) {
+        const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
+        const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
+        chunks.push({
+          ...pendingChunk,
+          contentHash,
+        });
+      }
 
-    // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
-    if (chunks.length === 0) {
-      const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
-      chunks.push({
-        name: null,
-        chunkKind: 'file_body',
-        lineStart: 1,
-        lineEnd: sourceLineCount,
-        startByte: 0,
-        endByte: source.length,
-        contentHash,
-        language,
-      });
+      // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
+      if (chunks.length === 0) {
+        const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+        chunks.push({
+          name: null,
+          chunkKind: 'file_body',
+          lineStart: 1,
+          lineEnd: sourceLineCount,
+          startByte: 0,
+          endByte: source.length,
+          contentHash,
+          language,
+        });
+      }
     }
 
     return { filePath, language, entities, chunks, relationships, fileRole: classifyFileRole(filePath, source) };

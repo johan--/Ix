@@ -272,6 +272,7 @@ export function buildPatchWithResolution(
   sourceHash: string,
   resolvedEdges: ResolvedEdge[],
   previousSourceHash?: string,
+  opts?: { emitClaims?: boolean },
 ): GraphPatchPayload {
   // Build lookup: `${srcName}:${predicate}:${dstName}` → { dstFilePath, dstQualifiedKey }
   // Callers should pass only edges for this file (pre-grouped) for best performance,
@@ -420,15 +421,17 @@ export function buildPatchWithResolution(
     });
   }
 
-  for (const r of relationships) {
-    const srcKey = resolveKey(r.srcName);
-    ops.push({
-      type: 'AssertClaim',
-      entityId: nodeId(filePath, srcKey),
-      field: `${r.predicate.toLowerCase()}:${r.dstName}`,
-      value: r.dstName,
-      confidence: null,
-    });
+  if (opts?.emitClaims !== false) {
+    for (const r of relationships) {
+      const srcKey = resolveKey(r.srcName);
+      ops.push({
+        type: 'AssertClaim',
+        entityId: nodeId(filePath, srcKey),
+        field: `${r.predicate.toLowerCase()}:${r.dstName}`,
+        value: r.dstName,
+        confidence: null,
+      });
+    }
   }
 
   const extractor = extractorName();

@@ -200,8 +200,20 @@ function stripChunkOps(patch: GraphPatchPayload): GraphPatchPayload {
   };
 }
 
-function isWriteConflict(err: unknown): boolean {
-  return String(err).includes('write-write conflict');
+const COMMIT_CONFLICT_RETRY_PATTERNS = [
+  'write-write conflict',
+  'timeout waiting to lock key',
+  'error: 1200',
+  // Transport-level failures (k8s ingress reset, socket drop under load).
+  // Safe to retry because the server never received / committed the payload.
+  'fetch failed',
+  'econnreset',
+  'econnrefused',
+];
+
+export function isRetryableCommitConflict(err: unknown): boolean {
+  const message = String(err).toLowerCase();
+  return COMMIT_CONFLICT_RETRY_PATTERNS.some(pattern => message.includes(pattern));
 }
 
 async function retryOnConflict<T>(fn: () => Promise<T>, maxRetries: number): Promise<T> {
@@ -209,9 +221,9 @@ async function retryOnConflict<T>(fn: () => Promise<T>, maxRetries: number): Pro
     try {
       return await fn();
     } catch (err) {
-      if (attempt >= maxRetries || !isWriteConflict(err)) throw err;
-      // ArangoDB write-write conflicts resolve as soon as the competing transaction
-      // commits — typically <10ms. Use short jittered delay to avoid thundering herd.
+      if (attempt >= maxRetries || !isRetryableCommitConflict(err)) throw err;
+      // ArangoDB lock conflicts usually clear as soon as the competing transaction
+      // commits. Transport errors may need a bit more breathing room under k8s load.
       const delay = 10 * (1 << attempt) + Math.random() * 10;
       await new Promise<void>(r => setTimeout(r, delay));
     }
@@ -339,13 +351,6 @@ export async function ingestFiles(
   let progressStart   = performance.now();
 
   const interval = opts.format === 'text' ? setInterval(() => {
-    const elapsed   = performance.now() - progressStart;
-    const tau       = progressPhase === 'Saving' ? 3000 : 2000;
-    let display     = progressCurrent;
-    if (progressTotal > 0 && progressCurrent < progressTotal) {
-      const simulated = Math.floor((1 - Math.exp(-elapsed / tau)) * 0.88 * progressTotal);
-      display = Math.max(display, simulated);
-    }
     if (debug && currentWorkLabel) {
       const workElapsed = performance.now() - currentWorkStart;
       if (workElapsed >= SLOW_WORK_LOG_MS && (lastSlowWorkNotice === 0 || workElapsed - lastSlowWorkNotice >= SLOW_WORK_REPEAT_MS)) {
@@ -353,7 +358,7 @@ export async function ingestFiles(
         process.stderr.write(`\n  [slow ${progressPhase.toLowerCase()}] ${currentWorkLabel} (${Math.round(workElapsed / 1000)}s)\n`);
       }
     }
-    process.stderr.write('\r' + renderProgressLine(progressPhase, display, progressTotal));
+    process.stderr.write('\r' + renderProgressLine(progressPhase, progressCurrent, progressTotal));
   }, 80) : null;
 
   let filesDiscovered = 0;
@@ -376,21 +381,41 @@ export async function ingestFiles(
   };
 
   // Phase timing marks
-  const timings = { moduleLoadMs: 0, discoverMs: 0, hashMs: 0, parseMs: 0, resolveMs: 0, buildPatchMs: 0, commitMs: 0 };
+  const timings = {
+    moduleLoadMs: 0, discoverMs: 0, hashMs: 0, parseMs: 0,
+    parseOnlyMs: 0,      // sum of just parseFile() call durations
+    resolveMs: 0, buildPatchMs: 0, commitMs: 0,
+    stripChunkOpsMs: 0,  // sum of stripChunkOps() durations (mapMode only)
+    bulkCommitMs: 0,     // time in successful commitPatchBulk() calls
+    fallbackCommitMs: 0, // time in per-file fallback commitPatch() calls
+  };
   const resolveStats = {
     importLookups: 0, transitiveLookups: 0, globalFallbacks: 0,
     globalCandidateTotal: 0, resolvedImport: 0, resolvedTransitive: 0,
     resolvedGlobal: 0, resolvedQualifier: 0, skippedSameFile: 0, skippedAmbiguous: 0,
   };
+  // Per-language parse timing: language → { ms, files }
+  const langParseMs = new Map<string, { ms: number; files: number }>();
+  // Total graph op counts across all committed batches
+  let totalNodesEmitted = 0;
+  let totalEdgesEmitted = 0;
+  let totalClaimsEmitted = 0;
+
   const logSaveTiming = (
     files: number,
     resolveEdgesMs: number,
     buildPatchMs: number,
+    stripMs: number,
     commitMs: number,
     totalSaveMs: number,
+    nodes: number,
+    edges: number,
+    claims: number,
   ): void => {
     process.stderr.write(
-      `\n[ingest-save] files=${files} resolveEdgesMs=${resolveEdgesMs} buildPatchMs=${buildPatchMs} commitMs=${commitMs} totalSaveMs=${totalSaveMs}\n`
+      `\n[ingest-save] files=${files} resolveEdgesMs=${resolveEdgesMs} buildPatchMs=${buildPatchMs}` +
+      (mapMode ? ` stripChunkOpsMs=${stripMs}` : '') +
+      ` commitMs=${commitMs} totalSaveMs=${totalSaveMs} nodes=${nodes} edges=${edges} claims=${claims}\n`
     );
   };
 
@@ -492,7 +517,8 @@ export async function ingestFiles(
     const PARSE_STREAM_CHUNK     = 1000;             // streaming batch size for large repos
     const SMALL_REPO_THRESHOLD   = 5_000;            // parse-all-first below this; streaming above
     const COMMIT_HTTP_MAX_FILES  = parsePositiveIntEnv('IX_COMMIT_HTTP_MAX_FILES', 200); // files per HTTP request to the backend
-    const COMMIT_CONCURRENCY     = parsePositiveIntEnv('IX_COMMIT_CONCURRENCY', 4);       // parallel HTTP save requests
+    const COMMIT_CONCURRENCY     = parsePositiveIntEnv('IX_COMMIT_CONCURRENCY', mapMode ? 2 : 4); // parallel HTTP save requests
+    const COMMIT_CONFLICT_RETRIES = parsePositiveIntEnv('IX_COMMIT_CONFLICT_RETRIES', 6); // retry transient Arango lock conflicts
     const YIELD_EVERY            = 100;              // yield event loop every N files during parse
 
     if (debug) {
@@ -532,6 +558,9 @@ export async function ingestFiles(
 
       const commitMsPerChunk = new Array<number>(chunks.length).fill(0);
       let nextChunk = 0;
+      // Fallback mutex: serializes per-file commits across all workers so that
+      // concurrent fallback loops don't race on revisions.current (Error 1200).
+      let fallbackTail: Promise<void> = Promise.resolve();
 
       const runChunk = async (ci: number): Promise<void> => {
         const chunk = chunks[ci];
@@ -543,8 +572,10 @@ export async function ingestFiles(
         try {
           setCurrentWork(`commit ${startFile}-${endFile} of ${totalFiles} ending ${endingPath}`);
           const commitStart = performance.now();
-          const result = await retryOnConflict(() => client.commitPatchBulk(patches), 3);
-          commitMsPerChunk[ci] = Math.round(performance.now() - commitStart);
+          const result = await retryOnConflict(() => client.commitPatchBulk(patches), COMMIT_CONFLICT_RETRIES);
+          const chunkMs = Math.round(performance.now() - commitStart);
+          commitMsPerChunk[ci] = chunkMs;
+          timings.bulkCommitMs += chunkMs;
           if (result.rev > latestRev) latestRev = result.rev;
           patchesApplied += patches.length;
         } catch (err) {
@@ -553,17 +584,30 @@ export async function ingestFiles(
               `\n  [bulk failed, falling back to per-file] files ${startFile}-${endFile} (${patches.length} patches): ${err}\n`
             );
           }
-          for (const item of chunk) {
-            try {
-              const commitStart = performance.now();
-              const result = await retryOnConflict(() => client.commitPatch(item.patch), 3);
-              commitMsPerChunk[ci] += Math.round(performance.now() - commitStart);
-              if (result.rev > latestRev) latestRev = result.rev;
-              patchesApplied++;
-            } catch (commitErr) {
-              parseErrors++;
-              process.stderr.write(`\n  [commit error] ${item.patch.source?.uri}: ${commitErr}\n`);
+          // Chain this chunk's fallback work onto the shared tail so that only one
+          // fallback loop runs at a time. This prevents concurrent commitPatch
+          // transactions from racing on revisions.current (write-write conflict).
+          const prev = fallbackTail;
+          let resolveThis!: () => void;
+          fallbackTail = new Promise<void>(r => { resolveThis = r; });
+          await prev;
+          try {
+            for (const item of chunk) {
+              try {
+                const commitStart = performance.now();
+                const result = await retryOnConflict(() => client.commitPatch(item.patch), COMMIT_CONFLICT_RETRIES);
+                const chunkMs = Math.round(performance.now() - commitStart);
+                commitMsPerChunk[ci] += chunkMs;
+                timings.fallbackCommitMs += chunkMs;
+                if (result.rev > latestRev) latestRev = result.rev;
+                patchesApplied++;
+              } catch (commitErr) {
+                parseErrors++;
+                process.stderr.write(`\n  [commit error] ${item.patch.source?.uri}: ${commitErr}\n`);
+              }
             }
+          } finally {
+            resolveThis();
           }
         }
 
@@ -591,13 +635,15 @@ export async function ingestFiles(
     const flushBatch = async (batch: ParsedFile[]): Promise<void> => {
       if (batch.length === 0) return;
       filesChanged += batch.length;
-      const previousPhase = progressPhase;
       const saveStart = performance.now();
       let resolveEdgesMs = 0;
       let buildPatchMs = 0;
+      let localStripMs = 0;
       let commitMs = 0;
+      let batchNodes = 0;
+      let batchEdges = 0;
+      let batchClaims = 0;
       progressPhase = 'Saving';
-      progressStart = performance.now();
       try {
         setCurrentWork(`resolve+commit batch ending ${nodePath.basename(batch[batch.length - 1].filePath)}`);
 
@@ -617,8 +663,7 @@ export async function ingestFiles(
         for (let j = 0; j < batch.length; j++) {
           const { parsed: p, hash, previousHash } = batch[j];
           try {
-            const rawPatch = buildPatchFn!(p, hash, batchEdgesByFile.get(p.filePath) ?? emptyEdges, previousHash);
-            const patch = mapMode ? stripChunkOps(rawPatch) : rawPatch;
+            const patch = buildPatchFn!(p, hash, batchEdgesByFile.get(p.filePath) ?? emptyEdges, previousHash, mapMode ? { emitClaims: false } : undefined);
             preparedPatches.push(makePreparedPatch(patch, j + 1, p.filePath));
           } catch (err) {
             parseErrors++;
@@ -626,15 +671,26 @@ export async function ingestFiles(
           }
         }
         buildPatchMs += Math.round(performance.now() - buildStart);
+        for (const pp of preparedPatches) {
+          for (const op of pp.patch.ops) {
+            if (op.type === 'UpsertNode') batchNodes++;
+            else if (op.type === 'UpsertEdge') batchEdges++;
+            else if (op.type === 'AssertClaim') batchClaims++;
+          }
+        }
         if (preparedPatches.length === 0) return;
         commitMs += await commitPreparedPatches(preparedPatches, batch.length);
       } finally {
         const totalSaveMs = Math.round(performance.now() - saveStart);
         timings.resolveMs += resolveEdgesMs;
         timings.buildPatchMs += buildPatchMs;
+        timings.stripChunkOpsMs += localStripMs;
         timings.commitMs += commitMs;
-        logSaveTiming(batch.length, resolveEdgesMs, buildPatchMs, commitMs, totalSaveMs);
-        progressPhase = previousPhase;
+        totalNodesEmitted += batchNodes;
+        totalEdgesEmitted += batchEdges;
+        totalClaimsEmitted += batchClaims;
+        logSaveTiming(batch.length, resolveEdgesMs, buildPatchMs, localStripMs, commitMs, totalSaveMs, batchNodes, batchEdges, batchClaims);
+        progressPhase = 'Parsing';
         progressStart = performance.now();
       }
     };
@@ -647,11 +703,14 @@ export async function ingestFiles(
       const saveStart = performance.now();
       let resolveEdgesMs = 0;
       let buildPatchMs = 0;
+      let localStripMs = 0;
       let commitMs = 0;
+      let batchNodes = 0;
+      let batchEdges = 0;
+      let batchClaims = 0;
       progressPhase   = 'Saving';
       progressTotal   = allParsed.length;
       progressCurrent = 0;
-      progressStart   = performance.now();
       try {
         setCurrentWork(`resolve ${allParsed.length} files`);
         const resolveStart = performance.now();
@@ -669,8 +728,7 @@ export async function ingestFiles(
         for (let j = 0; j < allParsed.length; j++) {
           const { parsed: p, hash, previousHash } = allParsed[j];
           try {
-            const rawPatch = buildPatchFn!(p, hash, edgesByFile.get(p.filePath) ?? emptyEdges, previousHash);
-            const patch = mapMode ? stripChunkOps(rawPatch) : rawPatch;
+            const patch = buildPatchFn!(p, hash, edgesByFile.get(p.filePath) ?? emptyEdges, previousHash, mapMode ? { emitClaims: false } : undefined);
             preparedPatches.push(makePreparedPatch(patch, j + 1, p.filePath));
           } catch (err) {
             parseErrors++;
@@ -678,6 +736,13 @@ export async function ingestFiles(
           }
         }
         buildPatchMs += Math.round(performance.now() - buildStart);
+        for (const pp of preparedPatches) {
+          for (const op of pp.patch.ops) {
+            if (op.type === 'UpsertNode') batchNodes++;
+            else if (op.type === 'UpsertEdge') batchEdges++;
+            else if (op.type === 'AssertClaim') batchClaims++;
+          }
+        }
         if (preparedPatches.length === 0) {
           progressCurrent = allParsed.length;
           return;
@@ -687,8 +752,12 @@ export async function ingestFiles(
         const totalSaveMs = Math.round(performance.now() - saveStart);
         timings.resolveMs += resolveEdgesMs;
         timings.buildPatchMs += buildPatchMs;
+        timings.stripChunkOpsMs += localStripMs;
         timings.commitMs += commitMs;
-        logSaveTiming(allParsed.length, resolveEdgesMs, buildPatchMs, commitMs, totalSaveMs);
+        totalNodesEmitted += batchNodes;
+        totalEdgesEmitted += batchEdges;
+        totalClaimsEmitted += batchClaims;
+        logSaveTiming(allParsed.length, resolveEdgesMs, buildPatchMs, localStripMs, commitMs, totalSaveMs, batchNodes, batchEdges, batchClaims);
         progressPhase   = previousPhase;
         progressStart   = performance.now();
       }
@@ -732,8 +801,14 @@ export async function ingestFiles(
               if (debug) process.stderr.write(`\n  [skip minified-likely] ${filePath}\n`);
               continue;
             }
-            const parsed = (ingestion.parseFile as Function)(filePath, sourceText);
+            const p0 = performance.now();
+            const parsed = (ingestion.parseFile as Function)(filePath, sourceText, { emitChunks: !mapMode });
+            const pfMs = performance.now() - p0;
             if (!parsed) { filesSkipped++; progressCurrent++; continue; }
+            timings.parseOnlyMs += pfMs;
+            const lang: string = (parsed as any).language ?? 'unknown';
+            const ls = langParseMs.get(lang) ?? { ms: 0, files: 0 };
+            ls.ms += pfMs; ls.files++; langParseMs.set(lang, ls);
             entitiesParsed += parsed.entities.length;
             allParsed.push({ filePath, parsed, hash, previousHash });
             progressCurrent++;
@@ -776,8 +851,14 @@ export async function ingestFiles(
             if (debug) process.stderr.write(`\n  [skip minified-likely] ${filePath}\n`);
             continue;
           }
-          const parsed = (ingestion.parseFile as Function)(filePath, sourceText);
+          const p0 = performance.now();
+          const parsed = (ingestion.parseFile as Function)(filePath, sourceText, { emitChunks: !mapMode });
+          const pfMs = performance.now() - p0;
           if (!parsed) { filesSkipped++; progressCurrent++; continue; }
+          timings.parseOnlyMs += pfMs;
+          const lang: string = (parsed as any).language ?? 'unknown';
+          const ls = langParseMs.get(lang) ?? { ms: 0, files: 0 };
+          ls.ms += pfMs; ls.files++; langParseMs.set(lang, ls);
           entitiesParsed += parsed.entities.length;
           const entry: ParsedFile = { filePath, parsed, hash, previousHash: previousHash !== hash ? previousHash : undefined };
           if (useParseAllFirst) { allParsedB.push(entry); } else { batch.push(entry); }
@@ -833,7 +914,15 @@ export async function ingestFiles(
       latestRev,
       skipReasons: { unchanged: filesSkipped, emptyFile: 0, parseError: parseErrors, tooLarge, minifiedLikely },
       elapsedSeconds: parseFloat(elapsed),
-      timings,
+      timings: {
+        ...timings,
+        parseOnlyMs: Math.round(timings.parseOnlyMs),
+        stripChunkOpsMs: Math.round(timings.stripChunkOpsMs),
+      },
+      emitted: { nodes: totalNodesEmitted, edges: totalEdgesEmitted, claims: totalClaimsEmitted },
+      langParseMs: Object.fromEntries(
+        [...langParseMs.entries()].map(([lang, s]) => [lang, { ms: Math.round(s.ms), files: s.files }])
+      ),
       resolveStats,
     }, null, 2));
   } else if (opts.printSummary !== false) {
@@ -855,13 +944,30 @@ export async function ingestFiles(
 
     if (debug) {
       console.log(chalk.dim(`\n  Phase timings:`));
-      console.log(chalk.dim(`    modules:  ${timings.moduleLoadMs}ms`));
-      console.log(chalk.dim(`    discover: ${timings.discoverMs}ms`));
-      console.log(chalk.dim(`    hash:     ${timings.hashMs}ms`));
-      console.log(chalk.dim(`    parse:    ${timings.parseMs}ms`));
-      console.log(chalk.dim(`    resolve:  ${timings.resolveMs}ms`));
-      console.log(chalk.dim(`    build:    ${timings.buildPatchMs}ms`));
-      console.log(chalk.dim(`    commit:   ${timings.commitMs}ms`));
+      console.log(chalk.dim(`    modules:     ${timings.moduleLoadMs}ms`));
+      console.log(chalk.dim(`    discover:    ${timings.discoverMs}ms`));
+      console.log(chalk.dim(`    hash:        ${timings.hashMs}ms`));
+      console.log(chalk.dim(`    parse total: ${timings.parseMs}ms`));
+      console.log(chalk.dim(`    parse only:  ${Math.round(timings.parseOnlyMs)}ms`));
+      console.log(chalk.dim(`    resolve:     ${timings.resolveMs}ms`));
+      console.log(chalk.dim(`    build:       ${timings.buildPatchMs}ms`));
+      if (mapMode) {
+        console.log(chalk.dim(`    stripChunk:  ${Math.round(timings.stripChunkOpsMs)}ms`));
+      }
+      console.log(chalk.dim(`    commit:      ${timings.commitMs}ms`));
+      console.log(chalk.dim(`      bulk:      ${timings.bulkCommitMs}ms`));
+      console.log(chalk.dim(`      fallback:  ${timings.fallbackCommitMs}ms`));
+      console.log(chalk.dim(`\n  Emitted ops:`));
+      console.log(chalk.dim(`    nodes:  ${totalNodesEmitted}`));
+      console.log(chalk.dim(`    edges:  ${totalEdgesEmitted}`));
+      console.log(chalk.dim(`    claims: ${totalClaimsEmitted}`));
+      if (langParseMs.size > 0) {
+        console.log(chalk.dim(`\n  Per-language parse times:`));
+        const sorted = [...langParseMs.entries()].sort((a, b) => b[1].ms - a[1].ms);
+        for (const [lang, stat] of sorted) {
+          console.log(chalk.dim(`    ${lang.padEnd(12)} ${Math.round(stat.ms)}ms (${stat.files} files)`));
+        }
+      }
       console.log(chalk.dim(`\n  Resolve stats:`));
       console.log(chalk.dim(`    import lookups:     ${resolveStats.importLookups}`));
       console.log(chalk.dim(`    transitive lookups: ${resolveStats.transitiveLookups}`));

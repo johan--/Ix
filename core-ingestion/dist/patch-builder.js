@@ -239,7 +239,7 @@ export function buildPatch(result, sourceHash, previousSourceHash) {
 // buildPatchWithResolution — like buildPatch but fixes CALLS edge dst to point
 // to the actual defining file for cross-file calls resolved by resolveCallEdges.
 // ---------------------------------------------------------------------------
-export function buildPatchWithResolution(result, sourceHash, resolvedEdges, previousSourceHash) {
+export function buildPatchWithResolution(result, sourceHash, resolvedEdges, previousSourceHash, opts) {
     // Build lookup: `${srcName}:${predicate}:${dstName}` → { dstFilePath, dstQualifiedKey }
     // Callers should pass only edges for this file (pre-grouped) for best performance,
     // but we still tolerate the full array for backward compatibility.
@@ -381,15 +381,17 @@ export function buildPatchWithResolution(result, sourceHash, resolvedEdges, prev
             attrs: {},
         });
     }
-    for (const r of relationships) {
-        const srcKey = resolveKey(r.srcName);
-        ops.push({
-            type: 'AssertClaim',
-            entityId: nodeId(filePath, srcKey),
-            field: `${r.predicate.toLowerCase()}:${r.dstName}`,
-            value: r.dstName,
-            confidence: null,
-        });
+    if (opts?.emitClaims !== false) {
+        for (const r of relationships) {
+            const srcKey = resolveKey(r.srcName);
+            ops.push({
+                type: 'AssertClaim',
+                entityId: nodeId(filePath, srcKey),
+                field: `${r.predicate.toLowerCase()}:${r.dstName}`,
+                value: r.dstName,
+                confidence: null,
+            });
+        }
     }
     const extractor = extractorName();
     const patchId = computePatchId(filePath, sourceHash, extractor);

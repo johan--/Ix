@@ -524,7 +524,7 @@ function renderNotes(facts: EntityFacts): string[] {
   for (const d of facts.diagnostics) {
     switch (d.code) {
       case "unresolved_call_target":
-        notes.push("Some downstream calls could not be resolved to named entities. Run `ix ingest` to improve coverage.");
+        notes.push("Some downstream calls could not be resolved to named entities. Run `ix map` to improve coverage.");
         break;
       case "stale_source":
         notes.push("Source file has changed since last ingest — results may be incomplete.");

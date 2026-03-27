@@ -228,7 +228,7 @@ function unwrapRustCfgMacros(source) {
 // ---------------------------------------------------------------------------
 // Main parse function
 // ---------------------------------------------------------------------------
-export function parseFile(filePath, source) {
+export function parseFile(filePath, source, opts) {
     const language = languageFromPath(filePath);
     if (!language)
         return null;
@@ -548,27 +548,29 @@ export function parseFile(filePath, source) {
                 continue;
             }
         }
-        for (const pendingChunk of pendingChunks) {
-            const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
-            const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
-            chunks.push({
-                ...pendingChunk,
-                contentHash,
-            });
-        }
-        // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
-        if (chunks.length === 0) {
-            const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
-            chunks.push({
-                name: null,
-                chunkKind: 'file_body',
-                lineStart: 1,
-                lineEnd: sourceLineCount,
-                startByte: 0,
-                endByte: source.length,
-                contentHash,
-                language,
-            });
+        if (opts?.emitChunks !== false) {
+            for (const pendingChunk of pendingChunks) {
+                const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
+                const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
+                chunks.push({
+                    ...pendingChunk,
+                    contentHash,
+                });
+            }
+            // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
+            if (chunks.length === 0) {
+                const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+                chunks.push({
+                    name: null,
+                    chunkKind: 'file_body',
+                    lineStart: 1,
+                    lineEnd: sourceLineCount,
+                    startByte: 0,
+                    endByte: source.length,
+                    contentHash,
+                    language,
+                });
+            }
         }
         return { filePath, language, entities, chunks, relationships, fileRole: classifyFileRole(filePath, source) };
     }
