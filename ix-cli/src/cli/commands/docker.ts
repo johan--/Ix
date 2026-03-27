@@ -136,7 +136,7 @@ export function registerDockerCommand(program: Command): void {
 
       console.log("Starting backend services...");
       try {
-        execFileSync("docker", ["compose", "-f", composeFile, "up", "-d"], {
+        execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "--pull", "always"], {
           stdio: "inherit",
         });
       } catch {
