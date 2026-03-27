@@ -336,4 +336,32 @@ describe('resolveEdges', () => {
 
     expect(resolveEdges([ambiguousGlobal, helperA, helperB])).toEqual([]);
   });
+
+  // BUG-2: struct references in C that come from system headers (<net/if.h>)
+  // must not be linked to an in-repo definition of the same struct name via
+  // global tier-3 fallback.
+  it('does not create a false REFERENCES edge for a C struct from a system header', () => {
+    // CurlTests.c: includes system <net/if.h> (not in batch) and uses struct ifreq
+    const curlTests = fileResult(
+      '/repo/CMake/CurlTests.c',
+      SupportedLanguages.C,
+      [],
+      [
+        { srcName: 'CurlTests.c', dstName: 'net/if.h', predicate: 'IMPORTS' },
+        { srcName: 'CurlTests.c', dstName: 'ifreq',    predicate: 'REFERENCES' },
+      ],
+    );
+
+    // if2ip.h: defines its own struct ifreq as a platform shim
+    const if2ip = fileResult(
+      '/repo/lib/if2ip.c',
+      SupportedLanguages.C,
+      [entity('ifreq', SupportedLanguages.C, 'class')],
+      [],
+    );
+
+    const resolved = resolveEdges([curlTests, if2ip]);
+    const refEdges = resolved.filter(e => e.predicate === 'REFERENCES');
+    expect(refEdges).toEqual([]);
+  });
 });

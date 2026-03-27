@@ -122,7 +122,7 @@ const DEFINITION_KIND_MAP: Record<string, string> = {
   'definition.property':  'function',
   'definition.const':     'function',
   'definition.static':    'function',
-  'definition.macro':     'function',
+  'definition.macro':     'macro',
   'definition.union':     'class',
   'definition.typedef':   'class',
   'definition.template':  'class',
@@ -221,6 +221,7 @@ export function isGrammarSupported(filePath: string): boolean {
 // ---------------------------------------------------------------------------
 
 let _parser: Parser | null = null;
+let _currentGrammar: any = null;
 const _queryCache = new Map<SupportedLanguages | 'tsx', { grammar: any; query: any }>();
 
 function getParser(): Parser {
@@ -240,6 +241,42 @@ function getCachedQuery(
   return query;
 }
 
+function normalizeCapturedImport(rawValue: string, language: SupportedLanguages): string {
+  const trimmed = rawValue.trim().replace(/\\\\/g, '/');
+  const unwrapped = trimmed
+    .replace(/^["'`<]/, '')
+    .replace(/[>"'`]$/, '');
+
+  if (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) {
+    return unwrapped.replace(/^\.\/+/, '');
+  }
+
+  const rawMod = unwrapped.split('/').filter((s: string) => s !== '*').pop() ?? unwrapped;
+  return rawMod.replace(/^\.+/, '');
+}
+
+function fileEntityName(filePath: string): string {
+  return nodePath.basename(filePath);
+}
+
+function looksLikeCppHeader(source: string): boolean {
+  return /\bclass\s+[A-Za-z_]\w*\b/.test(source)
+    || /\bnamespace\s+[A-Za-z_]\w*\b/.test(source)
+    || /\btemplate\s*</.test(source)
+    || /\busing\s+namespace\b/.test(source)
+    || /\b(public|private|protected)\s*:/.test(source)
+    || /\b(virtual|constexpr|typename|friend|operator)\b/.test(source)
+    || /\b[A-Za-z_]\w*::[A-Za-z_]\w*/.test(source);
+}
+
+function detectLanguageForSource(filePath: string, source: string): SupportedLanguages | null {
+  const language = languageFromPath(filePath);
+  if (language === SupportedLanguages.C && filePath.toLowerCase().endsWith('.h') && looksLikeCppHeader(source)) {
+    return SupportedLanguages.CPlusPlus;
+  }
+  return language;
+}
+
 // ---------------------------------------------------------------------------
 // Rust: cfg macro unwrapping
 // ---------------------------------------------------------------------------
@@ -252,31 +289,44 @@ function getCachedQuery(
  * preserving every character position and line number so that entity line
  * numbers remain accurate.
  */
+// Pre-compiled for blanking macro headers (preserves newlines, replaces all else with space)
+const _blankNonNewline = /[^\n]/g;
+
 function unwrapRustCfgMacros(source: string): string {
   const re = /\bcfg_(?:rt_multi_thread|not_rt|rt|io|time|sync|net|fs|process|signal)!\s*\{/g;
-  const chars = source.split('');
+  // Collect edit regions before mutating anything
+  const edits: Array<[number, number, number]> = []; // [macroStart, openBrace, closeBrace]
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
-    const openBrace = m.index + m[0].length - 1; // position of the `{`
-    // Find matching closing brace by counting depth
+    const openBrace = m.index + m[0].length - 1;
     let depth = 0;
     let closeBrace = -1;
     for (let i = openBrace; i < source.length; i++) {
       if (source[i] === '{') depth++;
       else if (source[i] === '}') {
-        depth--;
-        if (depth === 0) { closeBrace = i; break; }
+        if (--depth === 0) { closeBrace = i; break; }
       }
     }
-    if (closeBrace === -1) continue;
-    // Blank out everything from start of macro name up to and including `{`
-    for (let i = m.index; i <= openBrace; i++) {
-      if (chars[i] !== '\n') chars[i] = ' ';
-    }
-    // Blank out the matching closing `}`
-    chars[closeBrace] = ' ';
+    if (closeBrace !== -1) edits.push([m.index, openBrace, closeBrace]);
   }
-  return chars.join('');
+  if (edits.length === 0) return source;
+
+  // Build result from slices — avoids O(n) split('') allocation of N small string objects
+  const parts: string[] = [];
+  let pos = 0;
+  for (const [macroStart, openBrace, closeBrace] of edits) {
+    if (macroStart > pos) parts.push(source.slice(pos, macroStart));
+    // Blank macro name + opening brace (preserve newlines)
+    parts.push(source.slice(macroStart, openBrace + 1).replace(_blankNonNewline, ' '));
+    pos = openBrace + 1;
+    // Keep everything inside the braces unchanged
+    if (closeBrace > pos) parts.push(source.slice(pos, closeBrace));
+    // Blank closing brace
+    parts.push(' ');
+    pos = closeBrace + 1;
+  }
+  if (pos < source.length) parts.push(source.slice(pos));
+  return parts.join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +334,7 @@ function unwrapRustCfgMacros(source: string): string {
 // ---------------------------------------------------------------------------
 
 export function parseFile(filePath: string, source: string): FileParseResult | null {
-  const language = languageFromPath(filePath);
+  const language = detectLanguageForSource(filePath, source);
   if (!language) return null;
 
   // TypeScript TSX uses a separate grammar
@@ -297,7 +347,10 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
 
   try {
     const parser = getParser();
-    parser.setLanguage(grammar);
+    if (grammar !== _currentGrammar) {
+      parser.setLanguage(grammar);
+      _currentGrammar = grammar;
+    }
     // tree-sitter-java cannot parse array-type annotations on varargs params
     // (e.g. `@Nullable Object @Nullable ... args`). The second annotation causes
     // error recovery to truncate the enclosing class_declaration, orphaning all
@@ -319,6 +372,26 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const cacheKey = isTsx ? 'tsx' as const : language;
     const query = getCachedQuery(cacheKey, grammar, queries);
     const matches = query.matches(tree.rootNode);
+
+    // Pre-partition matches so each pass only iterates its relevant subset.
+    // Pass 1: definitions, heritage, Python typed-param/assign annotations.
+    // Pass 2: imports, calls, type references.
+    // Without this, every definition match does 5 useless find() calls in pass 2,
+    // and every call match does 4 useless find() calls in pass 1.
+    const pass1Matches: any[] = [];
+    const pass2Matches: any[] = [];
+    for (const m of matches) {
+      let isPass1 = false;
+      for (const c of m.captures) {
+        const n = c.name;
+        if (n.startsWith('definition.') || n.startsWith('heritage.') ||
+            n === '_typed_param_scope' || n === '_assign_scope') {
+          isPass1 = true;
+          break;
+        }
+      }
+      (isPass1 ? pass1Matches : pass2Matches).push(m);
+    }
 
     const fileName = nodePath.basename(filePath);
     let sourceLineCount = 1;
@@ -354,7 +427,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     const assignTypeMap = new Map<string, Map<string, string>>();
 
     // --- First pass: collect definitions ---
-    for (const match of matches) {
+    for (const match of pass1Matches) {
       // Definition captures: name + definition.*
       const defCapture = match.captures.find((c: any) =>
         c.name.startsWith('definition.')
@@ -487,7 +560,7 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
     }
 
     // --- Second pass: calls and imports ---
-    for (const match of matches) {
+    for (const match of pass2Matches) {
       // Full import statement captures (Scala: reconstructs dotted package paths)
       const importStmt = match.captures.find((c: any) => c.name === 'import.stmt');
       if (importStmt) {
@@ -521,12 +594,8 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
       // Import captures (JS/TS/Python path-based)
       const importSource = match.captures.find((c: any) => c.name === 'import.source');
       if (importSource) {
-        let importPath = importSource.node.text
-          .replace(/^["'`]|["'`]$/g, '') // strip quotes
-          .replace(/\\\\/g, '/');          // normalise backslashes
-        if (importPath.length > 0 && importPath !== '*') {
-          const rawMod = importPath.split('/').filter((s: string) => s !== '*').pop() ?? importPath;
-          const modName = rawMod.replace(/^\.+/, '');   // strip leading dots: '.models' → 'models'
+        const modName = normalizeCapturedImport(importSource.node.text, language);
+        if (modName.length > 0 && modName !== '*') {
           if (!modName) continue;                        // skip bare '.' relative imports
           entities.push({ name: modName, kind: 'module', lineStart: importSource.node.startPosition.row + 1, lineEnd: importSource.node.startPosition.row + 1, language });
           relationships.push({ srcName: fileName, dstName: modName, predicate: 'IMPORTS' });
@@ -822,7 +891,7 @@ export function resolveEdges(results: FileParseResult[], stats?: {
     for (let i = parts.length - 1; i >= parts.length - maxDepth; i--) {
       const pkg = parts.slice(i).join('.');
       const list = packageToFiles.get(pkg) ?? [];
-      if (!list.includes(r.filePath)) list.push(r.filePath);
+      list.push(r.filePath);
       packageToFiles.set(pkg, list);
     }
   }
@@ -837,7 +906,7 @@ export function resolveEdges(results: FileParseResult[], stats?: {
     if (nodePath.extname(r.filePath) !== '.go') continue;
     const dirName = nodePath.basename(nodePath.dirname(r.filePath));
     const list = goPkgDirToFiles.get(dirName) ?? [];
-    if (!list.includes(r.filePath)) list.push(r.filePath);
+    list.push(r.filePath);
     goPkgDirToFiles.set(dirName, list);
   }
 
@@ -854,6 +923,10 @@ export function resolveEdges(results: FileParseResult[], stats?: {
     // (TS/JS ESM imports use .js extensions that map to .ts source files)
     const noExt = modName.replace(/\.(js|ts|mjs|cjs|jsx|tsx|py|scala|java|c|cc|cpp|cxx|h|hh|hpp|hxx)$/, '');
     if (noExt !== modName && noExt && !candidates.includes(noExt)) candidates.push(noExt);
+    const pathBasename = nodePath.posix.basename(modName);
+    if (pathBasename && !candidates.includes(pathBasename)) candidates.push(pathBasename);
+    const pathBasenameNoExt = nodePath.posix.basename(noExt);
+    if (pathBasenameNoExt && !candidates.includes(pathBasenameNoExt)) candidates.push(pathBasenameNoExt);
     // For dotted paths (Scala/Java: 'ix.memory.model.Edge'), also try last segment
     const lastDot = modName.lastIndexOf('.');
     if (lastDot !== -1) {
@@ -947,6 +1020,21 @@ export function resolveEdges(results: FileParseResult[], stats?: {
       if (canonicalMatches.length === 1) return canonicalMatches;
     }
 
+    if (srcLanguage === SupportedLanguages.Java) {
+      const srcParts = srcFilePath.replace(/\\/g, '/').split('/');
+      const withProximity = matches.map(fp => {
+        const fpParts = fp.replace(/\\/g, '/').split('/');
+        let common = 0;
+        while (common < srcParts.length && common < fpParts.length && srcParts[common] === fpParts[common]) {
+          common++;
+        }
+        return { fp, common };
+      });
+      const maxCommon = Math.max(...withProximity.map(x => x.common));
+      const proximityMatches = withProximity.filter(x => x.common === maxCommon).map(x => x.fp);
+      if (proximityMatches.length === 1) return proximityMatches;
+    }
+
     if (srcLanguage !== SupportedLanguages.C && srcLanguage !== SupportedLanguages.CPlusPlus) return matches;
 
     let narrowed = matches;
@@ -1025,21 +1113,44 @@ export function resolveEdges(results: FileParseResult[], stats?: {
       // name ("ClaimId"), find files registered under that package, then find
       // the one that defines the entity.
       if (rel.predicate === 'IMPORTS') {
-        if (result.language !== SupportedLanguages.Scala && result.language !== SupportedLanguages.Java) continue;
-        const dstName = rel.dstName;
-        const lastDot = dstName.lastIndexOf('.');
-        if (lastDot === -1) continue; // not a dotted class import
-        const entityName = dstName.slice(lastDot + 1);
-        if (!entityName || entityName === '_') continue; // wildcard import
-        const pkgPath = dstName.slice(0, lastDot); // e.g. "ix.memory.model"
-        // Find files in the declared package that define this entity
-        const pkgFiles = packageToFiles.get(pkgPath) ?? [];
-        const matchFiles = pkgFiles.filter(fp => fp !== srcFilePath && fileHasSymbol.get(fp)?.has(entityName));
-        if (matchFiles.length !== 1) continue; // ambiguous or not found
-        const fp = matchFiles[0];
-        const dstQualifiedKey = bestQKey(fileQKeys, fp, entityName);
-        if (dstQualifiedKey === null) continue;
-        resolved.push({ srcFilePath, srcName: rel.srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: 'IMPORTS', confidence: 0.9 });
+        if (result.language === SupportedLanguages.Scala || result.language === SupportedLanguages.Java) {
+          const dstName = rel.dstName;
+          const lastDot = dstName.lastIndexOf('.');
+          if (lastDot !== -1) {
+            const entityName = dstName.slice(lastDot + 1);
+            if (entityName && entityName !== '_') {
+              const pkgPath = dstName.slice(0, lastDot);
+              const pkgFiles = packageToFiles.get(pkgPath) ?? [];
+              const matchFiles = pkgFiles.filter(fp => fp !== srcFilePath && fileHasSymbol.get(fp)?.has(entityName));
+              if (matchFiles.length === 1) {
+                const fp = matchFiles[0];
+                const dstQualifiedKey = bestQKey(fileQKeys, fp, entityName);
+                if (dstQualifiedKey !== null) {
+                  resolved.push({ srcFilePath, srcName: rel.srcName, dstFilePath: fp, dstName, dstQualifiedKey, predicate: 'IMPORTS', confidence: 0.9 });
+                  stats.resolvedImport++;
+                  continue;
+                }
+              }
+            }
+          }
+        }
+
+        const importMatches = modNameToFiles(rel.dstName, srcFilePath);
+        if (importMatches.length === 1) {
+          const fp = importMatches[0];
+          resolved.push({
+            srcFilePath,
+            srcName: rel.srcName,
+            dstFilePath: fp,
+            dstName: rel.dstName,
+            dstQualifiedKey: fileEntityName(fp),
+            predicate: 'IMPORTS',
+            confidence: 0.9,
+          });
+          stats.resolvedImport++;
+        } else if (importMatches.length > 1) {
+          stats.skippedAmbiguous++;
+        }
         continue;
       }
 
@@ -1119,6 +1230,13 @@ export function resolveEdges(results: FileParseResult[], stats?: {
       }
       // Tier 3: global fallback (confidence 0.5) — uses inverted symbol index
       // instead of scanning all files.
+      // Skip for C/C++ REFERENCES: struct/type references that don't resolve via the
+      // import chain come from system headers (e.g. <net/if.h>) and must not be
+      // linked to an in-repo definition of the same name.
+      if (rel.predicate === 'REFERENCES' &&
+          (srcLanguage === SupportedLanguages.C || srcLanguage === SupportedLanguages.CPlusPlus)) {
+        continue;
+      }
       stats.globalFallbacks++;
       const candidates = symbolToFiles.get(dstName) ?? [];
       let globalMatches = candidates.filter(fp => fp !== srcFilePath && fileLanguage.get(fp) === srcLanguage);

@@ -68,7 +68,8 @@ export function inferRole(facts: EntityFacts): RoleInference {
 
   // ── 1. Test ──────────────────────────────────────────────────────────
   if (
-    nameOrPathContains(facts, "test", "spec", "__tests__") ||
+    /[/\\](tests?|spec|__tests__)[/\\]/i.test(facts.path ?? "") ||
+    /\.(test|spec)\.[a-z]+$/i.test(facts.path ?? "") ||
     tokens.includes("test") ||
     tokens.includes("spec")
   ) {

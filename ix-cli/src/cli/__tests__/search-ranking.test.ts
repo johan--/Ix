@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { resolveEntityFull } from "../resolve.js";
+import { resolveEntityFull, scoreCandidate } from "../resolve.js";
 
 /**
  * Verify that search ranking correctly incorporates backend _search_weight.
@@ -8,8 +8,8 @@ import { resolveEntityFull } from "../resolve.js";
  * without needing a running backend.
  */
 
-/** Minimal scoreCandidate replica for testing (exact name = 0, prefix = 15, fuzzy = 30). */
-function scoreCandidate(node: any, term: string, opts?: { kind?: string; path?: string }): number {
+/** Minimal scoreCandidate replica for rankScore tests (exact name = 0, prefix = 15, fuzzy = 30). */
+function scoreCandidateSimple(node: any, term: string, opts?: { kind?: string; path?: string }): number {
   const name: string = (node.name || "").toLowerCase();
   const kind: string = (node.kind || "").toLowerCase();
   const symbolLower = term.toLowerCase();
@@ -32,7 +32,7 @@ function rankScore(
 ): { tier: number; score: number; matchSource: string } {
   // Weight comes through attrs (embedded by AQL into attrs JSON)
   const backendWeight: number = node.attrs?._search_weight ?? node._search_weight ?? 0;
-  const resolverScore = scoreCandidate(node, term, { kind: requestedKind, path: pathFilter });
+  const resolverScore = scoreCandidateSimple(node, term, { kind: requestedKind, path: pathFilter });
 
   if (backendWeight >= 100) {
     if (resolverScore <= -3) return { tier: 0, score: -backendWeight + resolverScore, matchSource: "name_exact" };
@@ -113,6 +113,83 @@ describe("search ranking with backend weight", () => {
     expect(r2.tier).toBeLessThanOrEqual(2);
     // No weight → falls through to resolver
     expect(r3.matchSource).toBe("resolver");
+  });
+});
+
+describe("scoreCandidate: structural kinds outrank chunks", () => {
+  // BUG-1 / BUG-2 regression: for PascalCase names, chunks must never outscore
+  // function/method entities. Previously a +3 penalty on method/function for
+  // looksTypeLikeSymbol names let chunks (score=0) beat them (score=2).
+
+  it("method outscores chunk for PascalCase name (Apply)", () => {
+    const method = { name: "Apply", kind: "method", provenance: { sourceUri: "etcd/apply/backend.go" } };
+    const chunk  = { name: "Apply", kind: "chunk",  provenance: { sourceUri: "etcd/apply/backend.go" } };
+    expect(scoreCandidate(method, "Apply")).toBeLessThan(scoreCandidate(chunk, "Apply"));
+  });
+
+  it("function outscores chunk for PascalCase name (StartEtcd)", () => {
+    const fn    = { name: "StartEtcd", kind: "function", provenance: { sourceUri: "etcd/embed/etcd.go" } };
+    const chunk = { name: "StartEtcd", kind: "chunk",    provenance: { sourceUri: "etcd/embed/etcd.go" } };
+    expect(scoreCandidate(fn, "StartEtcd")).toBeLessThan(scoreCandidate(chunk, "StartEtcd"));
+  });
+
+  it("class still outscores function for PascalCase type-like name", () => {
+    const cls = { name: "EtcdServer", kind: "class",    provenance: { sourceUri: "etcd/server.go" } };
+    const fn  = { name: "EtcdServer", kind: "function", provenance: { sourceUri: "etcd/server.go" } };
+    expect(scoreCandidate(cls, "EtcdServer")).toBeLessThan(scoreCandidate(fn, "EtcdServer"));
+  });
+});
+
+describe("resolveEntityFull: method preferred over chunk for PascalCase names", () => {
+  // BUG-1 regression: resolving "Apply" should return the method entity, not a chunk.
+  it("resolves to method entity, not chunk, when both have the same name", async () => {
+    const method = {
+      id: "method-apply-id",
+      name: "Apply",
+      kind: "method",
+      provenance: { sourceUri: "etcd/apply/backend.go" },
+    };
+    const chunk = {
+      id: "chunk-apply-id",
+      name: "Apply",
+      kind: "chunk",
+      provenance: { sourceUri: "etcd/apply/backend.go" },
+    };
+    const mockClient = {
+      search: vi.fn().mockResolvedValue([chunk, method]),
+    } as any;
+
+    const result = await resolveEntityFull(mockClient, "Apply", ["method"], { path: "etcd" });
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.entity.id).toBe("method-apply-id");
+      expect(result.entity.kind).toBe("method");
+    }
+  });
+
+  it("resolves StartEtcd to function entity, not chunk (BUG-2 regression)", async () => {
+    const fn = {
+      id: "fn-startetcd-id",
+      name: "StartEtcd",
+      kind: "function",
+      provenance: { sourceUri: "etcd/embed/etcd.go" },
+    };
+    const chunk = {
+      id: "chunk-startetcd-id",
+      name: "StartEtcd",
+      kind: "chunk",
+      provenance: { sourceUri: "etcd/embed/etcd.go" },
+    };
+    const mockClient = {
+      search: vi.fn().mockResolvedValue([chunk, fn]),
+    } as any;
+
+    const result = await resolveEntityFull(mockClient, "StartEtcd", ["function"], { path: "etcd" });
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.entity.id).toBe("fn-startetcd-id");
+      expect(result.entity.kind).toBe("function");
+    }
   });
 });
 

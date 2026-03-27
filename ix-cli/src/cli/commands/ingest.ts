@@ -2,7 +2,9 @@ import * as nodePath from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import type { Command } from 'commander';
+import { ParsePool } from './parse-pool.js';
 import chalk from 'chalk';
 import { IxClient } from '../../client/api.js';
 import type { GraphPatchPayload } from '../../client/types.js';
@@ -135,7 +137,8 @@ const PROG_LINE_WIDTH = 72;
 
 function renderProgressLine(phase: string, current: number, total: number): string {
   if (total === 0) {
-    return `  ${phase}...`.padEnd(PROG_LINE_WIDTH);
+    const bar = chalk.dim('░'.repeat(PROG_BAR_WIDTH));
+    return `  ${phase.padEnd(8)}  ${bar}    0%`.padEnd(PROG_LINE_WIDTH);
   }
   const pct    = Math.min(current / total, 1);
   const filled = Math.round(pct * PROG_BAR_WIDTH);
@@ -204,20 +207,13 @@ export async function ingestFiles(
   const client = new IxClient(getEndpoint());
   const start = performance.now();
 
-  let progressPhase   = 'Scanning';
+  let progressPhase   = 'Parsing';
   let progressCurrent = 0;
   let progressTotal   = 0;
   let progressStart   = performance.now();
 
   const interval = opts.format === 'text' ? setInterval(() => {
-    const elapsed   = performance.now() - progressStart;
-    const tau       = progressPhase === 'Saving' ? 3000 : 2000;
-    let display     = progressCurrent;
-    if (progressTotal > 0 && progressCurrent < progressTotal) {
-      const simulated = Math.floor((1 - Math.exp(-elapsed / tau)) * 0.88 * progressTotal);
-      display = Math.max(display, simulated);
-    }
-    process.stderr.write('\r' + renderProgressLine(progressPhase, display, progressTotal));
+    process.stderr.write('\r' + renderProgressLine(progressPhase, progressCurrent, progressTotal));
   }, 80) : null;
 
   let filesDiscovered = 0;
@@ -236,6 +232,13 @@ export async function ingestFiles(
     globalCandidateTotal: 0, resolvedImport: 0, resolvedTransitive: 0,
     resolvedGlobal: 0, resolvedQualifier: 0, skippedSameFile: 0, skippedAmbiguous: 0,
   };
+
+  const workerPath = nodePath.resolve(
+    nodePath.dirname(fileURLToPath(import.meta.url)),
+    '../../../../core-ingestion/dist/parse-worker.js',
+  );
+  const pool = new ParsePool(workerPath, Math.max(1, os.cpus().length - 1));
+  pool.init();
 
   try {
     // Phase: discover files
@@ -257,9 +260,8 @@ export async function ingestFiles(
     timings.discoverMs = Math.round(discovered - start);
 
     progressPhase   = 'Parsing';
-    progressTotal   = filePaths.length;
+    progressTotal   = 0;
     progressCurrent = 0;
-    progressStart   = performance.now();
 
     // Phase: mtime pre-filter — skip readFileSync+sha256 for files whose mtime
     // is unchanged since the last successful ingest (common "ix map" re-run case).
@@ -340,6 +342,7 @@ export async function ingestFiles(
     const flushBatch = async (batch: ParsedFile[]): Promise<void> => {
       if (batch.length === 0) return;
       filesChanged += batch.length;
+      await new Promise<void>(r => setImmediate(r));
 
       const resolvedEdges = resolveEdgesFn!(batch.map(f => f.parsed), resolveStats);
       const batchEdgesByFile = new Map<string, any[]>();
@@ -349,6 +352,7 @@ export async function ingestFiles(
         arr.push(edge);
       }
 
+      const subChunks: GraphPatchPayload[][] = [];
       for (let i = 0; i < batch.length; i += COMMIT_CHUNK_SIZE) {
         const end = Math.min(i + COMMIT_CHUNK_SIZE, batch.length);
         const patchChunk: GraphPatchPayload[] = [];
@@ -361,7 +365,9 @@ export async function ingestFiles(
             process.stderr.write(`\n  [patch build error] ${p.filePath}: ${err}\n`);
           }
         }
-        if (patchChunk.length === 0) continue;
+        if (patchChunk.length > 0) subChunks.push(patchChunk);
+      }
+      await Promise.all(subChunks.map(async (patchChunk) => {
         try {
           const result = await client.commitPatchBulk(patchChunk);
           if (result.rev > latestRev) latestRev = result.rev;
@@ -379,14 +385,16 @@ export async function ingestFiles(
             }
           }
         }
-      }
+      }));
     };
 
     if ((knownHashes.size > 0 || mtimeChangedPaths.length === 0) && !opts.force) {
       // Path A: has baseline or all mtime-clean → pre-scan to detect changes before loading modules.
       // If nothing changed, module load is skipped entirely.
       const changedPaths: Array<{ filePath: string; bytes: Buffer; hash: string; previousHash: string | undefined }> = [];
-      for (const filePath of mtimeChangedPaths) {
+      for (let k = 0; k < mtimeChangedPaths.length; k++) {
+        if (k > 0 && k % 200 === 0) await new Promise<void>(r => setImmediate(r));
+        const filePath = mtimeChangedPaths[k];
         try {
           const bytes = fs.readFileSync(filePath);
           const hash = sha256(bytes);
@@ -405,25 +413,30 @@ export async function ingestFiles(
         timings.moduleLoadMs = Math.round(performance.now() - moduleStart);
         resolveEdgesFn = ingestion.resolveEdges as Function;
         buildPatchFn = patchBuilder.buildPatchWithResolution as Function;
+        progressPhase   = 'Parsing';
+        progressTotal   = changedPaths.length;
+        progressCurrent = 0;
+        if (interval) process.stderr.write('\r' + renderProgressLine(progressPhase, progressCurrent, progressTotal));
 
-        let batch: ParsedFile[] = [];
-        for (let i = 0; i < changedPaths.length; i++) {
-          const { filePath, bytes, hash, previousHash } = changedPaths[i];
-          try {
-            const parsed = (ingestion.parseFile as Function)(filePath, bytes.toString('utf-8'));
-            if (!parsed) { filesSkipped++; progressCurrent++; continue; }
+        let pendingFlush: Promise<void> = Promise.resolve();
+        for (let i = 0; i < changedPaths.length; i += PARSE_STREAM_CHUNK) {
+          const chunk = changedPaths.slice(i, i + PARSE_STREAM_CHUNK);
+          const parseResults = await Promise.all(
+            chunk.map(({ filePath, bytes }) =>
+              pool.parse(filePath, bytes.toString('utf-8')).then(r => { progressCurrent++; return r; }),
+            ),
+          );
+          const batch: ParsedFile[] = [];
+          for (let j = 0; j < chunk.length; j++) {
+            const parsed = parseResults[j] as any;
+            if (!parsed) { filesSkipped++; continue; }
             entitiesParsed += parsed.entities.length;
-            batch.push({ filePath, parsed, hash, previousHash });
-            progressCurrent++;
-          } catch (err) {
-            parseErrors++;
-            progressCurrent++;
-            process.stderr.write(`\n  [parse error] ${filePath}: ${err}\n`);
+            batch.push({ filePath: chunk[j].filePath, parsed, hash: chunk[j].hash, previousHash: chunk[j].previousHash });
           }
-          if ((i + 1) % YIELD_EVERY === 0) await new Promise<void>(resolve => setImmediate(resolve));
-          if (batch.length >= PARSE_STREAM_CHUNK) { await flushBatch(batch); batch = []; }
+          await pendingFlush;
+          pendingFlush = flushBatch(batch);
         }
-        await flushBatch(batch);
+        await pendingFlush;
       }
     } else {
       // Path B: no baseline (first ingest) or --force → load modules, then stream parse + commit.
@@ -432,32 +445,52 @@ export async function ingestFiles(
       timings.moduleLoadMs = Math.round(performance.now() - moduleStart);
       resolveEdgesFn = ingestion.resolveEdges as Function;
       buildPatchFn = patchBuilder.buildPatchWithResolution as Function;
+      progressPhase   = 'Parsing';
+      progressTotal   = filePaths.length;
+      progressCurrent = 0;
+      if (interval) process.stderr.write('\r' + renderProgressLine(progressPhase, progressCurrent, progressTotal));
 
-      let batch: ParsedFile[] = [];
-      for (let i = 0; i < filePaths.length; i++) {
-        const filePath = filePaths[i];
-        try {
-          const fileSize = fs.statSync(filePath).size;
-          if (fileSize === 0) { filesSkipped++; progressCurrent++; continue; }
-          if (fileSize > MAX_FILE_BYTES) { tooLarge++; progressCurrent++; continue; }
-          const bytes = fs.readFileSync(filePath);
-          const hash = sha256(bytes);
-          if (!opts.force && knownHashes.get(filePath) === hash) { filesSkipped++; progressCurrent++; continue; }
-          const previousHash = knownHashes.get(filePath);
-          const parsed = (ingestion.parseFile as Function)(filePath, bytes.toString('utf-8'));
-          if (!parsed) { filesSkipped++; progressCurrent++; continue; }
-          entitiesParsed += parsed.entities.length;
-          batch.push({ filePath, parsed, hash, previousHash: previousHash !== hash ? previousHash : undefined });
-          progressCurrent++;
-        } catch (err) {
-          parseErrors++;
-          progressCurrent++;
-          process.stderr.write(`\n  [parse error] ${filePath}: ${err}\n`);
+      let pendingFlush: Promise<void> = Promise.resolve();
+      for (let i = 0; i < filePaths.length; i += PARSE_STREAM_CHUNK) {
+        const chunk = filePaths.slice(i, i + PARSE_STREAM_CHUNK);
+        type FileData = { filePath: string; bytes: Buffer; hash: string; previousHash: string | undefined };
+        const fileData: Array<FileData | null> = [];
+        for (const filePath of chunk) {
+          try {
+            const fileSize = fs.statSync(filePath).size;
+            if (fileSize === 0) { filesSkipped++; fileData.push(null); continue; }
+            if (fileSize > MAX_FILE_BYTES) { tooLarge++; fileData.push(null); continue; }
+            const bytes = fs.readFileSync(filePath);
+            const hash = sha256(bytes);
+            if (!opts.force && knownHashes.get(filePath) === hash) { filesSkipped++; fileData.push(null); continue; }
+            const previousHash = knownHashes.get(filePath);
+            fileData.push({ filePath, bytes, hash, previousHash: previousHash !== hash ? previousHash : undefined });
+          } catch (err) {
+            parseErrors++;
+            fileData.push(null);
+            process.stderr.write(`\n  [read error] ${filePath}: ${err}\n`);
+          }
         }
-        if ((i + 1) % YIELD_EVERY === 0) await new Promise<void>(resolve => setImmediate(resolve));
-        if (batch.length >= PARSE_STREAM_CHUNK) { await flushBatch(batch); batch = []; }
+        const parseResults = await Promise.all(
+          fileData.map(f =>
+            f
+              ? pool.parse(f.filePath, f.bytes.toString('utf-8')).then(r => { progressCurrent++; return r; })
+              : Promise.resolve(null),
+          ),
+        );
+        const batch: ParsedFile[] = [];
+        for (let j = 0; j < fileData.length; j++) {
+          const f = fileData[j];
+          if (!f) continue;
+          const parsed = parseResults[j] as any;
+          if (!parsed) { filesSkipped++; continue; }
+          entitiesParsed += parsed.entities.length;
+          batch.push({ filePath: f.filePath, parsed, hash: f.hash, previousHash: f.previousHash });
+        }
+        await pendingFlush;
+        pendingFlush = flushBatch(batch);
       }
-      await flushBatch(batch);
+      await pendingFlush;
     }
 
     const parsed = performance.now();
@@ -476,6 +509,7 @@ export async function ingestFiles(
       saveMtimeCache(projectRoot, currentMtimes);
     }
   } finally {
+    await pool.destroy();
     if (interval) {
       clearInterval(interval);
       if (progressTotal > 0) {

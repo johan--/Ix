@@ -95,6 +95,25 @@ def my_view(request):
     });
   });
 
+  it('emits REFERENCES edge for class passed as keyword argument value', () => {
+    const result = parseFile(
+      '/repo/admin/sites.py',
+      `
+class AdminSite:
+    def login(self, request):
+        return LoginView.as_view(authentication_form=AdminAuthenticationForm, extra_context=context)
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    // AdminAuthenticationForm passed as kwarg value → CALLS edge from login
+    expect(result!.relationships).toContainEqual({
+      srcName: 'AdminSite.login',
+      dstName: 'AdminAuthenticationForm',
+      predicate: 'CALLS',
+    });
+  });
+
   it('resolves qualifier from Model.objects.method() assignment (Pattern 2)', () => {
     const result = parseFile(
       '/repo/views.py',

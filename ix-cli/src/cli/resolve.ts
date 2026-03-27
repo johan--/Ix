@@ -35,6 +35,10 @@ const STRUCTURAL_KINDS = new Set([
   ...CONTAINER_KINDS, "function", "method",
 ]);
 
+function looksTypeLikeSymbol(symbol: string): boolean {
+  return /^[A-Z][A-Za-z0-9_]*$/.test(symbol);
+}
+
 // ── Scoring ───────────────────────────────────────────────────────────────
 
 /**
@@ -77,8 +81,19 @@ export function scoreCandidate(
     score -= 3; // containers are high-value resolution targets
   } else if (STRUCTURAL_KINDS.has(kind)) {
     score -= 1; // methods/functions are useful but lower than containers
+  } else if (kind === "chunk") {
+    score += 5; // chunks are retrieval units, not useful as trace starting points
   }
   // non-structural kinds (config_entry, doc, decision, etc.) get no boost
+
+  if (looksTypeLikeSymbol(symbol) && name === symbolLower) {
+    if (kind === "class" || kind === "interface" || kind === "trait" || kind === "object") {
+      score -= 4;
+    }
+    // No penalty for method/function: the +3 that was here caused chunks (score=0)
+    // to outscore structural entities (function/method net score=2) for PascalCase
+    // names like "Apply", "StartEtcd", "Range". Chunks are now penalised explicitly above.
+  }
 
   // ── Path match ──────────────────────────────────────────────────────
   if (opts?.path) {
@@ -129,7 +144,11 @@ export async function resolveEntityFull(
   opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean; searchLimit?: number }
 ): Promise<ResolveResult> {
   const kindFilter = opts?.kind;
-  const nodes = await client.search(symbol, { limit: opts?.searchLimit ?? 20, kind: kindFilter, nameOnly: true });
+  const nodes = await client.search(symbol, {
+    limit: opts?.searchLimit ?? (looksTypeLikeSymbol(symbol) ? 50 : 20),
+    kind: kindFilter,
+    nameOnly: true,
+  });
 
   if (nodes.length === 0) {
     stderr(`No entity found matching "${symbol}".`);
@@ -202,8 +221,6 @@ function pickBest(
   preferredKinds: string[],
   opts?: { kind?: string; path?: string }
 ): ResolveResult | null {
-  // Here is a test
-  // LEt's see if it worked
   // Score all candidates
   const scored = candidates.map(n => ({
     node: n,
@@ -351,7 +368,6 @@ function nodeToResolved(node: any, symbol: string, mode: ResolutionMode): Resolv
 }
 
 function buildAmbiguous(nodes: any[], scores?: number[]): AmbiguousResult {
-  //this is a test
   const seen = new Set<string>();
   const candidates: AmbiguousResult["candidates"] = [];
   let rank = 0;

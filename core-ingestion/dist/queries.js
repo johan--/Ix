@@ -260,6 +260,14 @@ export const PYTHON_QUERIES = `
 (typed_parameter type: (type (identifier) @reference.type))
 (typed_default_parameter type: (type (identifier) @reference.type))
 
+; Class/function references passed as keyword argument values
+; e.g. LoginView.as_view(authentication_form=AdminAuthenticationForm, ...)
+; Emits a CALLS edge from the enclosing function to the referenced identifier.
+(call
+  arguments: (argument_list
+    (keyword_argument
+      value: (identifier) @call.name)))
+
 ; Typed parameters: capture name + type together so qualifier substitution can
 ; map a local variable name to its declared class (e.g. query: Query → 'query' → 'Query').
 (function_definition

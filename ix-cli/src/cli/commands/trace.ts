@@ -117,7 +117,7 @@ async function buildTraceTree(
 
 // ── Path search (BFS) ────────────────────────────────────────────────
 
-async function findPath(
+export async function findPath(
   client: IxClient,
   fromId: string,
   toId: string,
@@ -134,9 +134,12 @@ async function findPath(
     const { id, path } = entry;
     if (path.length >= maxDepth) continue;
 
-    const result = await client.expand(id, { direction: "out", predicates, hops: 1 });
+    const [outResult, inResult] = await Promise.all([
+      client.expand(id, { direction: "out", predicates, hops: 1 }),
+      client.expand(id, { direction: "in", predicates, hops: 1 }),
+    ]);
 
-    for (const n of result.nodes) {
+    for (const n of [...outResult.nodes, ...inResult.nodes]) {
       const name = n.name || n.attrs?.name || n.id.slice(0, 8);
       if (!nodeMap.has(n.id)) {
         nodeMap.set(n.id, { name, kind: n.kind ?? "unknown" });
@@ -441,7 +444,7 @@ export function registerTraceCommand(program: Command): void {
             for (const child of children) {
               nodes.push({ id: child.id, name: child.name, kind: child.kind });
               // downstream = in edges (child → parent), upstream = out edges (parent → child)
-              edges.push({ from: doUpstream ? parentId : child.id, to: doUpstream ? child.id : parentId, kind: relKind });
+              edges.push({ from: doUpstream ? child.id : parentId, to: doUpstream ? parentId : child.id, kind: relKind });
               collectJson(child.id, child.children);
             }
           }

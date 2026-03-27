@@ -85,8 +85,7 @@ export interface ResolvedEdge {
  *   - Unambiguous class method: dstQualifiedKey === 'ClassName.method'
  *   - Ambiguous (two entities share the same plain name): edge not emitted
  */
-/** Stats collected during resolution (exposed for debug instrumentation). */
-export interface ResolveStats {
+export declare function resolveEdges(results: FileParseResult[], stats?: {
     importLookups: number;
     transitiveLookups: number;
     globalFallbacks: number;
@@ -97,8 +96,6 @@ export interface ResolveStats {
     resolvedQualifier: number;
     skippedSameFile: number;
     skippedAmbiguous: number;
-}
-export declare function resolveEdges(results: FileParseResult[]): ResolvedEdge[];
-export declare function resolveEdges(results: FileParseResult[], statsOut: ResolveStats): ResolvedEdge[];
+}): ResolvedEdge[];
 /** @deprecated Use resolveEdges instead. */
 export declare function resolveCallEdges(results: FileParseResult[]): ResolvedCallEdge[];

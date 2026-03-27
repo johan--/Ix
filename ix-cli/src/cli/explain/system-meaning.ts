@@ -27,7 +27,7 @@ function domainNounFromName(name: string): string {
     .toLowerCase()
     .split(/\s+/);
   // Drop common suffixes that aren't the domain noun
-  const drop = new Set(["kind", "type", "api", "result", "config", "service", "interface"]);
+  const drop = new Set(["kind", "type", "api", "result", "config", "service", "interface", "i"]);
   const domainWords = words.filter((w) => !drop.has(w));
   return domainWords.length > 0 ? domainWords[0] : words[0];
 }

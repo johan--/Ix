@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
-import type { FileParseResult, ParsedEntity, ParsedRelationship, ResolvedEdge } from '../index.js';
+import { parseFile, resolveEdges, type FileParseResult, type ParsedEntity, type ParsedRelationship, type ResolvedEdge } from '../index.js';
 import { SupportedLanguages } from '../languages.js';
 import { buildPatchWithResolution } from '../patch-builder.js';
 
@@ -106,6 +106,47 @@ describe('buildPatchWithResolution', () => {
     expect(callEdges).toContainEqual(expect.objectContaining({
       src: nodeId(sourceFile, 'BackgroundCompaction'),
       dst: nodeId('/repo/compaction_job.cc', 'CompactionJob.Run'),
+    }));
+  });
+
+  it('rewrites resolved C++ imports to the imported file node', () => {
+    const importer = parseFile(
+      '/repo/include/KimeraRPGO/outlier/Pcm.h',
+      `
+#include "KimeraRPGO/utils/GraphUtils.h"
+
+class Pcm {};
+      `,
+    );
+    const imported = parseFile(
+      '/repo/include/KimeraRPGO/utils/GraphUtils.h',
+      `
+struct Trajectory {};
+      `,
+    );
+
+    expect(importer).not.toBeNull();
+    expect(imported).not.toBeNull();
+
+    const resolvedEdges = resolveEdges([importer!, imported!]);
+    expect(resolvedEdges).toContainEqual({
+      srcFilePath: '/repo/include/KimeraRPGO/outlier/Pcm.h',
+      srcName: 'Pcm.h',
+      dstFilePath: '/repo/include/KimeraRPGO/utils/GraphUtils.h',
+      dstName: 'KimeraRPGO/utils/GraphUtils.h',
+      dstQualifiedKey: 'GraphUtils.h',
+      predicate: 'IMPORTS',
+      confidence: 0.9,
+    });
+
+    const patch = buildPatchWithResolution(importer!, 'test-hash', resolvedEdges);
+    const importEdge = patch.ops.find(
+      (op) => op.type === 'UpsertEdge' && op.predicate === 'IMPORTS',
+    );
+
+    expect(importEdge).toEqual(expect.objectContaining({
+      src: nodeId('/repo/include/KimeraRPGO/outlier/Pcm.h', 'Pcm.h'),
+      dst: nodeId('/repo/include/KimeraRPGO/utils/GraphUtils.h', 'GraphUtils.h'),
     }));
   });
 });

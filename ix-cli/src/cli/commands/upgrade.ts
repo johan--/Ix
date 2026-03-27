@@ -108,6 +108,7 @@ export async function checkForUpdate(): Promise<void> {
 }
 
 function printUpdateNotice(current: string, latest: string): void {
+  process.stderr.write('\r' + ' '.repeat(80) + '\r');
   console.error("");
   console.error(
     chalk.yellow(`  Update available: ${current} → ${latest}`)

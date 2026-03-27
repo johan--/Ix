@@ -106,4 +106,35 @@ static int smtp_connect(struct Curl_easy *data, struct connectdata *conn) {
       .map(r => r.dstName);
     expect(importTargets).toContain('curl.h');
   });
+
+  // BUG-1: #define macros must be classified as 'macro', not 'function'
+  it('classifies #define macros as kind macro, not function', () => {
+    const result = parseFile(
+      '/repo/curl.h',
+      `
+#ifndef CURLINC_CURL_H
+#define CURLINC_CURL_H
+
+#define CURL_STRICTER
+#define CURL_EXTERN extern
+#define enquote(x) #x
+#define expand(x) enquote(x)
+
+void curl_global_init(void);
+      `,
+    );
+
+    expect(result).not.toBeNull();
+    const macroEntities = result!.entities.filter(e =>
+      ['CURLINC_CURL_H', 'CURL_STRICTER', 'CURL_EXTERN', 'enquote', 'expand'].includes(e.name),
+    );
+    expect(macroEntities.length).toBeGreaterThan(0);
+    for (const e of macroEntities) {
+      expect(e.kind).toBe('macro');
+    }
+
+    // Real function must still be 'function'
+    const fn = result!.entities.find(e => e.name === 'curl_global_init');
+    expect(fn?.kind).toBe('function');
+  });
 });
