@@ -5,6 +5,7 @@ import java.time.Instant
 import java.util.UUID
 
 import cats.effect.IO
+import cats.syntax.parallel._
 import cats.syntax.traverse._
 import io.circe.Json
 import io.circe.syntax._
@@ -50,16 +51,15 @@ class BulkWriteApi(client: ArangoClient) {
   )(insert: Seq[BulkDoc] => IO[Int]): IO[Long] =
     if (docs.isEmpty) IO.pure(0L)
     else {
-      val batches = chunkDocs(docs, maxDocs)
-      batches.foldLeft(IO.pure(0L)) { case (accIO, batch) =>
+      val batches = chunkDocs(docs, maxDocs).toVector
+      batches.parTraverse { batch =>
         for {
-          acc <- accIO
-          ms  <- timedUnit(withRetry(insert(batch)))
-          _   <- if (debugBulkWrites)
-                   logger.info(s"[bulk-write] collection=$collection docs=${batch.size} insertMs=$ms")
-                 else IO.unit
-        } yield acc + ms
-      }
+          ms <- timedUnit(withRetry(insert(batch)))
+          _  <- if (debugBulkWrites)
+                  logger.info(s"[bulk-write] collection=$collection docs=${batch.size} insertMs=$ms")
+                else IO.unit
+        } yield ms
+      }.map(_.sum)
     }
 
   def commitBatch(
