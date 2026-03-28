@@ -333,7 +333,7 @@ function unwrapRustCfgMacros(source: string): string {
 // Main parse function
 // ---------------------------------------------------------------------------
 
-export function parseFile(filePath: string, source: string, opts?: { emitChunks?: boolean }): FileParseResult | null {
+export function parseFile(filePath: string, source: string): FileParseResult | null {
   const language = detectLanguageForSource(filePath, source);
   if (!language) return null;
 
@@ -374,7 +374,7 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
     const matches = query.matches(tree.rootNode);
 
     // Pre-partition matches so each pass only iterates its relevant subset.
-    // Pass 1: definitions, heritage, Python typed-param/assign annotations.
+    // Pass 1: definitions, heritage, and language-specific type hints.
     // Pass 2: imports, calls, type references.
     // Without this, every definition match does 5 useless find() calls in pass 2,
     // and every call match does 4 useless find() calls in pass 1.
@@ -385,7 +385,7 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
       for (const c of m.captures) {
         const n = c.name;
         if (n.startsWith('definition.') || n.startsWith('heritage.') ||
-            n === '_typed_param_scope' || n === '_assign_scope') {
+            n === '_typed_param_scope' || n === '_assign_scope' || n === '_typed_var_scope') {
           isPass1 = true;
           break;
         }
@@ -425,6 +425,8 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
     const paramTypeMap = new Map<string, Map<string, string>>();
     // Python: map function name → (variable name → assigned type) for untyped-param qualifier substitution
     const assignTypeMap = new Map<string, Map<string, string>>();
+    // C/C++: map enclosing scope → (variable/member name → declared type)
+    const declaredTypeMap = new Map<string, Map<string, string>>();
 
     // --- First pass: collect definitions ---
     for (const match of pass1Matches) {
@@ -557,6 +559,24 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
           continue;
         }
       }
+
+      // C/C++ typed declarations: capture local vars, parameters, and fields so that
+      // member calls like current->Get(...) can be rewritten to Version.Get.
+      if (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) {
+        const typedVarScope = match.captures.find((c: any) => c.name === '_typed_var_scope');
+        const typedVarName = match.captures.find((c: any) => c.name === '_typed_var_name');
+        const typedVarType = match.captures.find((c: any) => c.name === '_typed_var_type');
+        if (typedVarScope && typedVarName && typedVarType) {
+          const line = typedVarScope.node.startPosition.row + 1;
+          const scope =
+            findEnclosingFunction(entities, line)
+            ?? findEnclosing(classRanges, line, '')
+            ?? fileName;
+          if (!declaredTypeMap.has(scope)) declaredTypeMap.set(scope, new Map());
+          declaredTypeMap.get(scope)!.set(typedVarName.node.text, typedVarType.node.text);
+          continue;
+        }
+      }
     }
 
     // --- Second pass: calls and imports ---
@@ -666,6 +686,15 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
               if (typeForParam) qualifier = typeForParam;
               else if (typeForAssign) qualifier = typeForAssign;
             }
+          } else if (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) {
+            const funcName = findEnclosingFunction(entities, callLine) ?? fileName;
+            const className = findEnclosing(classRanges, callLine, '')
+              ?? (funcName.includes('.') ? funcName.slice(0, funcName.lastIndexOf('.')) : undefined);
+            const typeForDecl =
+              declaredTypeMap.get(funcName)?.get(qualifier)
+              ?? (className ? declaredTypeMap.get(className)?.get(qualifier) : undefined)
+              ?? declaredTypeMap.get(fileName)?.get(qualifier);
+            if (typeForDecl) qualifier = typeForDecl;
           }
           return `${qualifier}.${callee}`;
         })();
@@ -698,30 +727,28 @@ export function parseFile(filePath: string, source: string, opts?: { emitChunks?
       }
     }
 
-    if (opts?.emitChunks !== false) {
-      for (const pendingChunk of pendingChunks) {
-        const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
-        const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
-        chunks.push({
-          ...pendingChunk,
-          contentHash,
-        });
-      }
+    for (const pendingChunk of pendingChunks) {
+      const chunkText = source.slice(pendingChunk.startByte, pendingChunk.endByte);
+      const contentHash = crypto.createHash('sha256').update(chunkText).digest('hex').slice(0, 16);
+      chunks.push({
+        ...pendingChunk,
+        contentHash,
+      });
+    }
 
-      // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
-      if (chunks.length === 0) {
-        const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
-        chunks.push({
-          name: null,
-          chunkKind: 'file_body',
-          lineStart: 1,
-          lineEnd: sourceLineCount,
-          startByte: 0,
-          endByte: source.length,
-          contentHash,
-          language,
-        });
-      }
+    // Fallback: if no semantic chunks found, emit one file_body chunk covering the whole file
+    if (chunks.length === 0) {
+      const contentHash = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+      chunks.push({
+        name: null,
+        chunkKind: 'file_body',
+        lineStart: 1,
+        lineEnd: sourceLineCount,
+        startByte: 0,
+        endByte: source.length,
+        contentHash,
+        language,
+      });
     }
 
     return { filePath, language, entities, chunks, relationships, fileRole: classifyFileRole(filePath, source) };
@@ -774,8 +801,10 @@ function bestQKey(
   fileQKeys: Map<string, Map<string, string[]>>,
   filePath: string,
   plainName: string,
+  preferredQKey?: string,
 ): string | null {
   const qks = [...new Set(fileQKeys.get(filePath)?.get(plainName) ?? [])];
+  if (preferredQKey && qks.includes(preferredQKey)) return preferredQKey;
   return qks.length === 1 ? qks[0] : null;
 }
 
@@ -1076,6 +1105,11 @@ export function resolveEdges(results: FileParseResult[], stats?: {
   // ── Main resolution loop ───────────────────────────────────────────
 
 
+  function fileDefinesQualifiedMember(filePath: string, qualifierPart: string, memberPart: string): boolean {
+    const qks = fileQKeys.get(filePath)?.get(memberPart) ?? [];
+    return qks.includes(`${qualifierPart}.${memberPart}`);
+  }
+
   const resolved: ResolvedEdge[] = [];
 
   for (const result of results) {
@@ -1171,12 +1205,14 @@ export function resolveEdges(results: FileParseResult[], stats?: {
           // Try import-scoped qualifier first
           const qualImportMatches: string[] = [];
           for (const fp of importedFilePaths) {
-            if (fileHasSymbol.get(fp)?.has(qualifierPart)) qualImportMatches.push(fp);
+            if (fileDefinesQualifiedMember(fp, qualifierPart, memberPart) || fileHasSymbol.get(fp)?.has(qualifierPart)) {
+              qualImportMatches.push(fp);
+            }
           }
           if (qualImportMatches.length === 1) {
             const qfp = qualImportMatches[0];
             if (fileHasSymbol.get(qfp)?.has(memberPart)) {
-              const dstQualifiedKey = bestQKey(fileQKeys, qfp, memberPart);
+              const dstQualifiedKey = bestQKey(fileQKeys, qfp, memberPart, `${qualifierPart}.${memberPart}`);
               if (dstQualifiedKey !== null) {
                 // dstName must match rel.dstName so buildPatchWithResolution can look it up
                 resolved.push({ srcFilePath, srcName, dstFilePath: qfp, dstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.9 });
@@ -1184,12 +1220,14 @@ export function resolveEdges(results: FileParseResult[], stats?: {
             }
             continue;
           }
-          // Global qualifier fallback — use symbolToFiles index instead of full scan
-          const qualGlobalMatches = (symbolToFiles.get(qualifierPart) ?? []).filter(fp => fp !== srcFilePath);
+          // Global qualifier fallback — check files that define the qualified member
+          const qualGlobalMatches = results
+            .map(r => r.filePath)
+            .filter(fp => fp !== srcFilePath && fileDefinesQualifiedMember(fp, qualifierPart, memberPart));
           if (qualGlobalMatches.length === 1) {
             const qfp = qualGlobalMatches[0];
             if (fileHasSymbol.get(qfp)?.has(memberPart)) {
-              const dstQualifiedKey = bestQKey(fileQKeys, qfp, memberPart);
+              const dstQualifiedKey = bestQKey(fileQKeys, qfp, memberPart, `${qualifierPart}.${memberPart}`);
               if (dstQualifiedKey !== null) {
                 resolved.push({ srcFilePath, srcName, dstFilePath: qfp, dstName, dstQualifiedKey, predicate: rel.predicate, confidence: 0.7 });
               }

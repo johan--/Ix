@@ -515,22 +515,22 @@ export const CPP_QUERIES = `
 
 ; Functions & Methods (direct declarator)
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
-(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.method
+(function_definition declarator: (function_declarator declarator: (qualified_identifier scope: (_) @receiver.type name: (identifier) @name))) @definition.method
 
 ; Functions/methods returning pointers (pointer_declarator wraps function_declarator)
 (function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name)))) @definition.method
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier scope: (_) @receiver.type name: (identifier) @name)))) @definition.method
 
 ; Functions/methods returning double pointers (nested pointer_declarator)
 (function_definition declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name)))) @definition.function
-(function_definition declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))))) @definition.method
+(function_definition declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier scope: (_) @receiver.type name: (identifier) @name))))) @definition.method
 
 ; Functions/methods returning references (reference_declarator wraps function_declarator)
 (function_definition declarator: (reference_declarator (function_declarator declarator: (identifier) @name))) @definition.function
-(function_definition declarator: (reference_declarator (function_declarator declarator: (qualified_identifier name: (identifier) @name)))) @definition.method
+(function_definition declarator: (reference_declarator (function_declarator declarator: (qualified_identifier scope: (_) @receiver.type name: (identifier) @name)))) @definition.method
 
 ; Destructors (destructor_name is distinct from identifier in tree-sitter-cpp)
-(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (destructor_name) @name))) @definition.method
+(function_definition declarator: (function_declarator declarator: (qualified_identifier scope: (_) @receiver.type name: (destructor_name) @name))) @definition.method
 
 ; Function declarations / prototypes (common in headers)
 (declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.function
@@ -555,6 +555,7 @@ export const CPP_QUERIES = `
 ; Calls
 (call_expression function: (identifier) @call.name) @call
 (call_expression function: (field_expression field: (field_identifier) @call.name)) @call
+(call_expression function: (field_expression argument: (identifier) @_qualifier field: (field_identifier) @call.name)) @call
 (call_expression function: (qualified_identifier name: (identifier) @call.name)) @call
 (call_expression function: (template_function name: (identifier) @call.name)) @call
 
@@ -570,6 +571,35 @@ export const CPP_QUERIES = `
 ; Type references — captures types used in declaration/parameter positions
 (declaration type: (type_identifier) @reference.type)
 (parameter_declaration type: (type_identifier) @reference.type)
+
+; Typed declarations for qualifier substitution: local vars, fields, params
+(declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (identifier) @_typed_var_name) @_typed_var_scope
+(declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (pointer_declarator declarator: (identifier) @_typed_var_name)) @_typed_var_scope
+(declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (init_declarator declarator: (identifier) @_typed_var_name)) @_typed_var_scope
+(declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (init_declarator declarator: (pointer_declarator declarator: (identifier) @_typed_var_name))) @_typed_var_scope
+(declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (reference_declarator (identifier) @_typed_var_name)) @_typed_var_scope
+(field_declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (field_identifier) @_typed_var_name) @_typed_var_scope
+(field_declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (pointer_declarator declarator: (field_identifier) @_typed_var_name)) @_typed_var_scope
+(parameter_declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (identifier) @_typed_var_name) @_typed_var_scope
+(parameter_declaration
+  type: (type_identifier) @_typed_var_type
+  declarator: (pointer_declarator declarator: (identifier) @_typed_var_name)) @_typed_var_scope
 `;
 
 // C# queries - works with tree-sitter-c-sharp
