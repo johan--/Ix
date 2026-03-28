@@ -39,7 +39,7 @@ describe("file-first resolution helper", () => {
   it("resolveFileOrEntity tries file graph match before symbol resolution", () => {
     // The function should check looksFileLike first, then fall through to resolveEntity
     expect(resolveContent).toContain("looksFileLike(target)");
-    expect(resolveContent).toContain("tryFileGraphMatch(client, target)");
+    expect(resolveContent).toContain("tryFileGraphMatch(client, target,");
     expect(resolveContent).toContain("resolveEntity(client, target,");
   });
 
