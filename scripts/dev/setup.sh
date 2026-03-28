@@ -15,7 +15,7 @@ set -euo pipefail
 #   ./setup.sh --skip-global-ix    # Skip installing global ix command
 # ─────────────────────────────────────────────────────────────────────────────
 
-IX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 SKIP_BACKEND=false
 SKIP_GLOBAL_IX=false
@@ -66,6 +66,16 @@ EOF
   chmod +x "$ix_shim"
 
   ensure_local_bin_on_path
+
+  # On Windows (Git Bash / MINGW), also update the .cmd shim in ~/.ix/bin
+  if [[ "${OSTYPE}" == "msys" || "${OSTYPE}" == "cygwin" || -n "${WINDIR:-}" ]]; then
+    local ix_cmd="$HOME/.ix/bin/ix.cmd"
+    if [ -f "$ix_cmd" ]; then
+      local win_entry
+      win_entry="$(cygpath -w "$ix_entry")"
+      printf '@echo off\r\nnode "%s" %%*\r\n' "$win_entry" > "$ix_cmd"
+    fi
+  fi
 }
 
 while [[ $# -gt 0 ]]; do

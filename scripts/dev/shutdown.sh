@@ -15,7 +15,7 @@ set -euo pipefail
 #   ./shutdown.sh --clean --disconnect ~/my-project # Full teardown
 # ─────────────────────────────────────────────────────────────────────────────
 
-IX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$IX_DIR"
 
 CLEAN=false
@@ -108,10 +108,10 @@ elif ! docker info &> /dev/null 2>&1; then
   echo "  [ok] Docker not running, nothing to stop"
 else
   if [ "$CLEAN" = true ]; then
-    docker compose down -v 2>&1 | sed 's/^/  /'
+    docker compose -f "$IX_DIR/docker-compose.yml" down -v 2>&1 | sed 's/^/  /'
     echo "  [ok] Containers stopped and data volumes removed"
   else
-    docker compose down 2>&1 | sed 's/^/  /'
+    docker compose -f "$IX_DIR/docker-compose.yml" down 2>&1 | sed 's/^/  /'
     echo "  [ok] Containers stopped (data preserved)"
   fi
 fi
