@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Understand any codebase instantly.</h1>
-<p align="center"><em>Your virtual cartographer.</em></p>
+<p align="center"><em>Your context saver and virtual cartographer.</em></p>
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/ix-infrastructure/IX-Memory" />
