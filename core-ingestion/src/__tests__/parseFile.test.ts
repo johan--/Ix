@@ -59,4 +59,53 @@ describe('mixed-language fixture integration', () => {
       resolved.some(edge => edge.srcFilePath.endsWith('.ts') && edge.dstFilePath.endsWith('.scala')),
     ).toBe(false);
   });
+
+  it('captures C++ out-of-line method containers and qualifier-based calls', () => {
+    const source = `
+class VersionSet {
+ public:
+  void Recover();
+};
+
+class Version {
+ public:
+  void Get();
+};
+
+class DBImpl {
+ public:
+  VersionSet* versions_;
+  Version* current_;
+  void Open();
+  void Read();
+};
+
+void DBImpl::Open() {
+  versions_->Recover();
+}
+
+void DBImpl::Read() {
+  Version* current = current_;
+  current->Get();
+}
+`;
+    const result = parseFile('leveldb/db/db_impl.cc', source);
+    expect(result).not.toBeNull();
+
+    expect(result!.entities).toContainEqual(expect.objectContaining({
+      name: 'Open',
+      kind: 'method',
+      container: 'DBImpl',
+    }));
+    expect(result!.relationships).toContainEqual({
+      srcName: 'DBImpl.Open',
+      dstName: 'VersionSet.Recover',
+      predicate: 'CALLS',
+    });
+    expect(result!.relationships).toContainEqual({
+      srcName: 'DBImpl.Read',
+      dstName: 'Version.Get',
+      predicate: 'CALLS',
+    });
+  });
 });

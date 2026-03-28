@@ -364,4 +364,31 @@ describe('resolveEdges', () => {
     const refEdges = resolved.filter(e => e.predicate === 'REFERENCES');
     expect(refEdges).toEqual([]);
   });
+
+  it('resolves qualified C++ member calls even when the source file defines a same-named method', () => {
+    const caller = fileResult(
+      '/repo/db_impl.cc',
+      SupportedLanguages.CPlusPlus,
+      [
+        entity('Open', SupportedLanguages.CPlusPlus, 'method', 'DBImpl'),
+        entity('Recover', SupportedLanguages.CPlusPlus, 'method', 'DBImpl'),
+      ],
+      [{ srcName: 'DBImpl.Open', dstName: 'VersionSet.Recover', predicate: 'CALLS' }],
+    );
+    const callee = fileResult(
+      '/repo/version_set.cc',
+      SupportedLanguages.CPlusPlus,
+      [entity('Recover', SupportedLanguages.CPlusPlus, 'method', 'VersionSet')],
+    );
+
+    expect(resolveEdges([caller, callee])).toContainEqual({
+      srcFilePath: '/repo/db_impl.cc',
+      srcName: 'DBImpl.Open',
+      dstFilePath: '/repo/version_set.cc',
+      dstName: 'VersionSet.Recover',
+      dstQualifiedKey: 'VersionSet.Recover',
+      predicate: 'CALLS',
+      confidence: 0.7,
+    });
+  });
 });
