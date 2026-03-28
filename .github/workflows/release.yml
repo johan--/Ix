@@ -98,10 +98,14 @@ jobs:
           npm run build
           npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
-      # ── 3b. Build System Compass ────────────────────────────────────────
+      # ── 3b. Build System Compass (optional — needs COMPASS_TOKEN secret) ─
       - name: Build System Compass
+        if: ${{ secrets.COMPASS_TOKEN != '' }}
+        continue-on-error: true
+        env:
+          COMPASS_TOKEN: ${{ secrets.COMPASS_TOKEN }}
         run: |
-          git clone https://x-access-token:${{ secrets.COMPASS_TOKEN }}@github.com/ix-infrastructure/system-compass.git
+          git clone https://x-access-token:${COMPASS_TOKEN}@github.com/ix-infrastructure/system-compass.git
           cd system-compass
           npm ci --silent
           npm run build
@@ -113,7 +117,7 @@ jobs:
           mkdir -p "$STAGING/cli" "$STAGING/core-ingestion" "$STAGING/compass"
           cp -r ix-cli/dist ix-cli/node_modules ix-cli/package.json "$STAGING/cli/"
           cp -r core-ingestion/dist core-ingestion/node_modules core-ingestion/package.json "$STAGING/core-ingestion/"
-          cp -r system-compass/dist/* "$STAGING/compass/"
+          [ -d system-compass/dist ] && cp -r system-compass/dist/* "$STAGING/compass/" || true
           cat > "$STAGING/ix" <<'WRAPPER'
           #!/bin/sh
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -129,7 +133,7 @@ jobs:
           mkdir -p "$STAGING/cli" "$STAGING/core-ingestion" "$STAGING/compass"
           cp -r ix-cli/dist ix-cli/node_modules ix-cli/package.json "$STAGING/cli/"
           cp -r core-ingestion/dist core-ingestion/node_modules core-ingestion/package.json "$STAGING/core-ingestion/"
-          cp -r system-compass/dist/* "$STAGING/compass/"
+          [ -d system-compass/dist ] && cp -r system-compass/dist/* "$STAGING/compass/" || true
           cat > "$STAGING/ix" <<'WRAPPER'
           #!/bin/sh
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -145,7 +149,7 @@ jobs:
           mkdir -p "$STAGING/cli" "$STAGING/core-ingestion" "$STAGING/compass"
           cp -r ix-cli/dist ix-cli/node_modules ix-cli/package.json "$STAGING/cli/"
           cp -r core-ingestion/dist core-ingestion/node_modules core-ingestion/package.json "$STAGING/core-ingestion/"
-          cp -r system-compass/dist/* "$STAGING/compass/"
+          [ -d system-compass/dist ] && cp -r system-compass/dist/* "$STAGING/compass/" || true
           cat > "$STAGING/ix" <<'WRAPPER'
           #!/bin/sh
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -161,7 +165,7 @@ jobs:
           mkdir -p "$STAGING/cli" "$STAGING/core-ingestion" "$STAGING/compass"
           cp -r ix-cli/dist ix-cli/node_modules ix-cli/package.json "$STAGING/cli/"
           cp -r core-ingestion/dist core-ingestion/node_modules core-ingestion/package.json "$STAGING/core-ingestion/"
-          cp -r system-compass/dist/* "$STAGING/compass/"
+          [ -d system-compass/dist ] && cp -r system-compass/dist/* "$STAGING/compass/" || true
           cat > "$STAGING/ix.cmd" <<'WRAPPER'
           @echo off
           node "%~dp0cli\dist\cli\main.js" %*
