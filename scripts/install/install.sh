@@ -81,7 +81,7 @@ resolve_version() {
   if command -v curl >/dev/null 2>&1; then
     local latest
     latest=$(curl -fsSL "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest" 2>/dev/null \
-      | grep '"tag_name"' | head -1 | sed 's/.*"v\(.*\)".*/\1/' || true)
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' || true)
     if [ -n "$latest" ]; then
       echo "$latest"
       return
