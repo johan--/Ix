@@ -173,14 +173,15 @@ export function registerUpgradeCommand(program: Command): void {
 
       writeCache(latest);
 
-      if (!isNewer(latest, current)) {
-        console.log(`[ok] Already on the latest version (${current})`);
-        return;
+      const cliUpToDate = !isNewer(latest, current);
+      if (cliUpToDate) {
+        console.log(`[ok] CLI already on the latest version (${current})`);
       }
 
+      if (!cliUpToDate) {
       console.log(`New version available: ${chalk.green(latest)}`);
 
-      if (opts.check) return;
+      if (!opts.check) {
 
       const platform = detectPlatform();
       const isWindows = platform.startsWith("windows");
@@ -287,6 +288,9 @@ export function registerUpgradeCommand(program: Command): void {
         // Backend not running, that's fine
       }
 
+      } // end if !opts.check
+      } // end if !cliUpToDate
+
       // ── Compass upgrade ──────────────────────────────────────────────
       console.log("Checking for compass updates...");
       const compassCurrent = getCompassVersion();
@@ -329,6 +333,6 @@ export function registerUpgradeCommand(program: Command): void {
       if (compassLatest) writeCache(latest, compassLatest);
 
       console.log("");
-      console.log(`[ok] ix ${latest} is ready`);
+      console.log("[ok] ix is up to date");
     });
 }
