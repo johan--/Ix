@@ -87,6 +87,8 @@ irm https://ix-infra.com/install.ps1 | iex
 /plugin install ix-memory
 /reload-plugin
 ```
+### Codex Plugin
+[Codex Plugin Repo](https://github.com/ix-infrastructure/ix-codex-plugin)
 
 ## Requirements
 
