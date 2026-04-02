@@ -582,18 +582,17 @@ function parseJsonFile(filePath: string, source: string): FileParseResult {
   const relationships: ParsedRelationship[] = [];
 
   // Walk the parsed JSON value, emitting one entity+chunk per object key.
-  // `path` is the dot-separated key ancestry; `parent` is the immediate parent key name.
+  // `path` is the fully qualified key ancestry for the current object.
   const walk = (
     value: unknown,
     path: string,
-    parent: string | undefined,
     lineHint: number,
   ): void => {
     if (value === null || typeof value !== 'object') return;
 
     if (Array.isArray(value)) {
       for (const item of value) {
-        walk(item, path, parent, lineHint);
+        walk(item, path, lineHint);
       }
       return;
     }
@@ -606,7 +605,7 @@ function parseJsonFile(filePath: string, source: string): FileParseResult {
         lineStart: lineHint,
         lineEnd: lineHint,
         language,
-        container: parent,
+        container: path || undefined,
       });
       chunks.push({
         name: key,
@@ -620,20 +619,20 @@ function parseJsonFile(filePath: string, source: string): FileParseResult {
           .update(`${fullPath}=${JSON.stringify((value as Record<string, unknown>)[key])}`)
           .digest('hex'),
         language,
-        container: parent,
+        container: path || undefined,
       });
       relationships.push({
-        srcName: parent ?? fileName,
+        srcName: path || fileName,
         dstName: key,
         predicate: 'CONTAINS',
       });
-      walk((value as Record<string, unknown>)[key], fullPath, key, lineHint);
+      walk((value as Record<string, unknown>)[key], fullPath, lineHint);
     }
   };
 
   try {
     const parsed: unknown = JSON.parse(source);
-    walk(parsed, '', undefined, 1);
+    walk(parsed, '', 1);
   } catch {
     // Unparseable JSON: fall through to file_body chunk below
   }

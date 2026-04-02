@@ -64,6 +64,50 @@ describe('JSON parsing', () => {
     expect(hostEntities.length).toBe(2);
   });
 
+  it('uses fully qualified containers for repeated nested keys', () => {
+    const result = parseFile(
+      '/repo/countries.json',
+      JSON.stringify({
+        name: { common: 'Aruba' },
+        currencies: { AWG: { name: 'Aruban florin' } },
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.entities).toContainEqual(
+      expect.objectContaining({ name: 'common', container: 'name' }),
+    );
+    expect(result!.entities).toContainEqual(
+      expect.objectContaining({ name: 'name', container: 'currencies.AWG' }),
+    );
+    expect(result!.relationships).toContainEqual({
+      srcName: 'currencies.AWG',
+      dstName: 'name',
+      predicate: 'CONTAINS',
+    });
+  });
+
+  it('parses geojson-style keys nested inside array items', () => {
+    const result = parseFile(
+      '/repo/abw.geo.json',
+      JSON.stringify({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', properties: { cca2: 'aw' } }],
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.entities).toContainEqual(
+      expect.objectContaining({ name: 'features', kind: 'config_entry' }),
+    );
+    expect(result!.entities).toContainEqual(
+      expect.objectContaining({ name: 'properties', container: 'features' }),
+    );
+    expect(result!.entities).toContainEqual(
+      expect.objectContaining({ name: 'cca2', container: 'features.properties' }),
+    );
+  });
+
   it('falls back to file_body chunk for invalid JSON', () => {
     const result = parseFile('/repo/broken.json', '{ invalid json }');
 
