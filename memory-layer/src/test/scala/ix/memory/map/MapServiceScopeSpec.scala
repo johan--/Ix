@@ -97,6 +97,34 @@ class MapServiceScopeSpec extends AnyFlatSpec with Matchers {
     completed.find(_.memberFiles == Set(fileB.id)).map(_.labelKind) shouldBe Some("module")
   }
 
+  "buildRegionEdgeDocs" should "attach files to their most specific surviving region" in {
+    val fileA = NodeId(UUID.randomUUID())
+    val fileB = NodeId(UUID.randomUUID())
+    val sharedRegionId = NodeId(UUID.randomUUID())
+    val childRegionId = NodeId(UUID.randomUUID())
+    val systemRegionId = NodeId(UUID.randomUUID())
+
+    val module = regionWithMembers("Dist", "module", 1, childRegionId, Set(fileA))
+    val system = regionWithMembers("Countries", "system", 2, systemRegionId, Set(fileA, fileB))
+    val collapsedSystem = regionWithMembers("Countries", "system", 2, sharedRegionId, Set(fileA))
+
+    val edgeDocs = service.buildRegionEdgeDocs(
+      regions = Vector(system, collapsedSystem, module),
+      newRev = 42L,
+      now = "2026-04-01T00:00:00Z",
+      provMap = new java.util.HashMap[String, AnyRef]()
+    )
+
+    val fileEdges = edgeDocs.filter { doc =>
+      val dst = doc.get("dst").toString
+      dst == fileA.value.toString || dst == fileB.value.toString
+    }
+    val fileEdgeByDst = fileEdges.map(doc => doc.get("dst").toString -> doc.get("src").toString).toMap
+
+    fileEdgeByDst(fileA.value.toString) shouldBe childRegionId.value.toString
+    fileEdgeByDst(fileB.value.toString) shouldBe systemRegionId.value.toString
+  }
+
   private def fileVertex(path: String): FileVertex =
     FileVertex(NodeId(UUID.randomUUID()), path)
 
