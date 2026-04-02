@@ -97,6 +97,30 @@ class MapServiceScopeSpec extends AnyFlatSpec with Matchers {
     completed.find(_.memberFiles == Set(fileB.id)).map(_.labelKind) shouldBe Some("module")
   }
 
+  it should "emit exactly one edge when a file belongs to multiple level-1 regions" in {
+    val file = NodeId(UUID.randomUUID())
+    val moduleId    = NodeId(UUID.randomUUID())
+    val subsystemId = NodeId(UUID.randomUUID())
+
+    // Both regions are level 1 — old code emitted two IN_REGION edges; new code emits one.
+    val moduleRegion    = regionWithMembers("Lib", "module",    1, moduleId,    Set(file))
+    val subsystemRegion = regionWithMembers("Lib", "subsystem", 1, subsystemId, Set(file))
+
+    val edgeDocs = service.buildRegionEdgeDocs(
+      regions = Vector(moduleRegion, subsystemRegion),
+      newRev  = 42L,
+      now     = "2026-04-01T00:00:00Z",
+      provMap = new java.util.HashMap[String, AnyRef]()
+    )
+
+    val fileEdges = edgeDocs.filter(_.get("dst").toString == file.value.toString)
+
+    // Exactly one edge — no duplicates from the two level-1 regions.
+    fileEdges should have length 1
+    // "module" sorts before "subsystem" so the module region wins.
+    fileEdges.head.get("src").toString shouldBe moduleId.value.toString
+  }
+
   "buildRegionEdgeDocs" should "attach files to their most specific surviving region" in {
     val fileA = NodeId(UUID.randomUUID())
     val fileB = NodeId(UUID.randomUUID())
