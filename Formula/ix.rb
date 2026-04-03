@@ -21,7 +21,9 @@ class Ix < Formula
 
     cd "ix-cli" do
       system "npm", "install", "--silent"
-      system "npm", "run", "build"
+      # Run tsc directly — npm run build would redundantly rebuild core-ingestion
+      # via build-core-ingestion.mjs, which triggers native module compilation
+      system "npx", "tsc"
 
       # Install the compiled CLI and its dependencies
       libexec.install "dist", "node_modules", "package.json"
