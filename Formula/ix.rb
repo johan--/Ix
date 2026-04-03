@@ -2,7 +2,7 @@ class Ix < Formula
   desc "Persistent memory for LLM systems — CLI for the Ix knowledge graph"
   homepage "https://github.com/ix-infrastructure/Ix"
   url "https://github.com/ix-infrastructure/Ix/archive/refs/tags/v0.5.1.tar.gz"
-  sha256 "3c0306198d2b6284c1f77f05b6a612fd8d59d65cf9956a5b5c0f416f83062eae"
+  sha256 "5c807a95dbccf620452f8cfc20f8c8ff2c72744aadcd0248a184f2ce09f9bdca"
   license "Apache-2.0"
   head "https://github.com/ix-infrastructure/Ix.git", branch: "main"
 
