@@ -213,7 +213,7 @@ function builtinsForLanguage(lang: SupportedLanguages): Set<string> {
 export function isGrammarSupported(filePath: string): boolean {
   const language = languageFromPath(filePath);
   if (!language) return false;
-  if (language === SupportedLanguages.YAML || language === SupportedLanguages.Dockerfile || language === SupportedLanguages.SQL || language === SupportedLanguages.JSON) return true;
+  if (language === SupportedLanguages.YAML || language === SupportedLanguages.Dockerfile || language === SupportedLanguages.SQL || language === SupportedLanguages.JSON || language === SupportedLanguages.TOML) return true;
   if (filePath.endsWith('.tsx')) return true; // TSX uses TypeScript.tsx, always available
   return GRAMMAR_MAP[language] !== undefined;
 }
