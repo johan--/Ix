@@ -426,9 +426,11 @@ function compactMapResult(result: any): any {
 function compactRegion(r: any): any {
   const out: any = {
     label: r.label,
+    label_kind: r.label_kind,
     level: r.level,
     files: r.file_count,
     children: r.child_region_count,
+    parent_id: r.parent_id ?? null,
     cohesion: roundFloat(r.cohesion),
     coupling: roundFloat(r.external_coupling),
     boundary: roundFloat(r.boundary_ratio),
