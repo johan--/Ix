@@ -525,6 +525,27 @@ function parseTomlFile(filePath: string, source: string): FileParseResult {
   return { filePath, language, entities, chunks, relationships, fileRole };
 }
 
+function cleanHeadingName(raw: string): string {
+  // 1. Strip VitePress anchor ID suffix {#...}
+  let s = raw.replace(/\s*\{#[^}]+\}\s*$/, '');
+  // 2. Unescape backslash-escaped angle brackets before HTML stripping
+  s = s.replace(/\\</g, '\x01LT\x01').replace(/\\>/g, '\x01GT\x01');
+  // 3. Protect inline code spans from HTML stripping
+  const spans: string[] = [];
+  s = s.replace(/`[^`]+`/g, (m) => { spans.push(m); return `\x00${spans.length - 1}\x00`; });
+  // 4. Strip HTML tags (decorative badges, <sup>, etc.)
+  s = s.replace(/<[^>]+>/g, '');
+  // 5. Restore inline code spans and strip their backtick delimiters
+  s = s.replace(/\x00(\d+)\x00/g, (_, i) => spans[Number(i)].replace(/`/g, ''));
+  // 6. Restore escaped angle brackets
+  s = s.replace(/\x01LT\x01/g, '<').replace(/\x01GT\x01/g, '>');
+  // 7. Strip VitePress stability markers (\* \*\* \*\*\*)
+  s = s.replace(/\\\*+/g, '');
+  // 8. Normalize whitespace
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  return s;
+}
+
 function parseMarkdownFile(filePath: string, source: string): FileParseResult {
   const language = SupportedLanguages.Markdown;
   const fileName = nodePath.basename(filePath);
@@ -591,7 +612,7 @@ function parseMarkdownFile(filePath: string, source: string): FileParseResult {
 
     const level = headingMatch ? headingMatch[1].length : Number(htmlHeadingMatch![1]);
     const rawName = headingMatch ? headingMatch[2] : htmlHeadingMatch![2];
-    const name = rawName.replace(/<[^>]+>/g, '').trim();
+    const name = cleanHeadingName(rawName);
     if (!name) continue;
     const lineNum = i + 1;
 

@@ -194,6 +194,42 @@ describe('Markdown parsing', () => {
     }));
   });
 
+  it('strips VitePress anchor ID suffix {#...} from heading names', () => {
+    const result = parseFile('/repo/docs.md', '## What is Vue? {#what-is-vue}');
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: 'What is Vue?', kind: 'heading' }));
+  });
+
+  it('preserves component names inside backticks when heading contains angle brackets', () => {
+    const result = parseFile('/repo/docs.md', '## `<Transition>` {#transition}');
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: '<Transition>', kind: 'heading' }));
+  });
+
+  it('handles backslash-escaped angle brackets in heading names', () => {
+    const result = parseFile('/repo/docs.md', '# \\<script setup> {#script-setup}');
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: '<script setup>', kind: 'heading' }));
+  });
+
+  it('strips backtick delimiters and VitePress stability markers', () => {
+    const result = parseFile('/repo/docs.md', '### `ref()` \\*\\* {#ref}');
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: 'ref()', kind: 'heading' }));
+  });
+
+  it('strips inline HTML badges and normalizes whitespace', () => {
+    const result = parseFile(
+      '/repo/docs.md',
+      '## app.onUnmount() <sup class="vt-badge" data-text="3.5+" /> {#app-onunmount}',
+    );
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: 'app.onUnmount()', kind: 'heading' }));
+  });
+
+  it('handles component names in backticks combined with inline HTML badges', () => {
+    const result = parseFile(
+      '/repo/docs.md',
+      '## `<Suspense>` <sup class="vt-badge experimental" /> {#suspense}',
+    );
+    expect(result!.entities).toContainEqual(expect.objectContaining({ name: '<Suspense>', kind: 'heading' }));
+  });
+
   it('parses single-line HTML headings commonly used in docs', () => {
     const result = parseFile(
       '/repo/docs.md',
