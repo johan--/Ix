@@ -51,11 +51,11 @@ function sourceType(filePath: string): string {
 }
 
 export function extractorName(): string {
-  return `tree-sitter/1.20`;
+  return `tree-sitter/1.21`;
 }
 
 /** Previous extractor versions — their patches are superseded when re-ingesting. */
-export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.19', 'tree-sitter/1.18', 'tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
+export const PREVIOUS_EXTRACTORS = ['tree-sitter/1.20', 'tree-sitter/1.19', 'tree-sitter/1.18', 'tree-sitter/1.17', 'tree-sitter/1.16', 'tree-sitter/1.15', 'tree-sitter/1.14', 'tree-sitter/1.13', 'tree-sitter/1.12', 'tree-sitter/1.11', 'tree-sitter/1.10', 'tree-sitter/1.9', 'tree-sitter/1.8', 'tree-sitter/1.7', 'tree-sitter/1.6', 'tree-sitter/1.5', 'tree-sitter/1.4', 'tree-sitter/1.3', 'tree-sitter/1.2', 'tree-sitter/1.1'];
 
 /** Compute a patchId for a (filePath, sourceHash, extractorVersion) triple. */
 function computePatchId(filePath: string, sourceHash: string, extractor: string): string {
@@ -146,10 +146,11 @@ export function buildPatch(
   for (const chunk of chunks) {
     const cid = chunkId(filePath, chunk.chunkKind, chunk.name, chunk.lineStart);
     const chunkName = chunk.name ?? `file_body:${chunk.lineStart}`;
+    const chunkNodeKind = chunk.chunkKind === 'section' ? 'section' : 'chunk';
     ops.push({
       type: 'UpsertNode',
       id: cid,
-      kind: 'chunk',
+      kind: chunkNodeKind,
       name: chunkName,
       attrs: {
         file_uri: filePath,
@@ -340,10 +341,11 @@ export function buildPatchWithResolution(
   for (const chunk of chunks) {
     const cid = chunkId(filePath, chunk.chunkKind, chunk.name, chunk.lineStart);
     const chunkName = chunk.name ?? `file_body:${chunk.lineStart}`;
+    const chunkNodeKind2 = chunk.chunkKind === 'section' ? 'section' : 'chunk';
     ops.push({
       type: 'UpsertNode',
       id: cid,
-      kind: 'chunk',
+      kind: chunkNodeKind2,
       name: chunkName,
       attrs: {
         file_uri: filePath,
