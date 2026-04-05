@@ -462,7 +462,8 @@ start_docker_daemon() {
     Darwin)
       if [ -d "/Applications/Docker.app" ]; then
         echo "  Starting Docker Desktop..."
-        open -a Docker
+        open -g -a Docker
+        osascript -e 'tell application "Docker" to activate' 2>/dev/null || true
         if ! wait_for_docker_daemon 15; then
           echo ""
           echo "  ┌─────────────────────────────────────────────────────────────┐"
