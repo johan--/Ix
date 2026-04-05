@@ -522,6 +522,23 @@ else
   if ! command -v docker >/dev/null 2>&1; then
     install_docker
     hash -r 2>/dev/null || true
+    # On macOS, Docker Desktop creates CLI symlinks only on first launch.
+    # Start it now so `docker` becomes available.
+    if [ -d "/Applications/Docker.app" ] && ! command -v docker >/dev/null 2>&1; then
+      echo "  Launching Docker Desktop to set up CLI tools..."
+      open -g -a Docker
+      osascript -e 'tell application "Docker" to activate' 2>/dev/null || true
+      printf "  Waiting for docker CLI..."
+      i=0
+      while [ "$i" -lt 30 ]; do
+        hash -r 2>/dev/null || true
+        if command -v docker >/dev/null 2>&1; then break; fi
+        printf "."
+        sleep 2
+        i=$((i + 1))
+      done
+      echo ""
+    fi
     if ! command -v docker >/dev/null 2>&1; then
       for p in /usr/local/bin /opt/homebrew/bin; do
         if [ -x "$p/docker" ]; then
