@@ -59,10 +59,10 @@ step()  { printf "\n-- %s --\n" "$*"; }
 
 if command -v curl >/dev/null 2>&1; then
   _fetch()    { curl -fsSL "$1"; }
-  _download() { curl -fsSL "$1" -o "$2"; }
+  _download() { curl -fL --progress-bar "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
   _fetch()    { wget -qO- "$1"; }
-  _download() { wget -qO "$2" "$1"; }
+  _download() { wget --show-progress -qO "$2" "$1" 2>&1 || wget -O "$2" "$1"; }
 else
   err "curl or wget is required but neither was found.
   Install one first and re-run:
