@@ -139,7 +139,14 @@ detect_platform() {
   arch="$(uname -m)"
 
   case "$os" in
-    darwin) os="darwin" ;;
+    darwin)
+      os="darwin"
+      # uname lies under Rosetta — detect real hardware
+      real_arm="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+      if [ "$real_arm" = "1" ]; then
+        arch="arm64"
+      fi
+      ;;
     linux)  os="linux" ;;
     mingw*|msys*|cygwin*) os="windows" ;;
     *)      err "Unsupported OS: $os" ;;
@@ -366,40 +373,42 @@ step "2. Docker + Docker Compose"
 install_docker() {
   case "$(uname -s)" in
     Darwin)
-      if command -v brew >/dev/null 2>&1; then
-        echo "  Installing Docker Desktop via Homebrew..."
-        echo "  (this downloads ~700MB — may take a few minutes)"
-        echo ""
-        # Remove ANY existing Docker symlinks/binaries that would cause
-        # brew to fail with "already a Binary" errors — whether stale,
-        # broken, or from a previous partial install.
-        for f in /usr/local/bin/docker /usr/local/bin/docker-compose \
-                 /usr/local/bin/docker-credential-desktop \
-                 /usr/local/bin/docker-credential-ecr-login \
-                 /usr/local/bin/docker-credential-osxkeychain \
-                 /usr/local/bin/com.docker.cli \
-                 /usr/local/bin/kubectl.docker /usr/local/bin/hub-tool \
-                 /usr/local/bin/docker-index; do
-          if [ -e "$f" ] || [ -L "$f" ]; then
-            rm -f "$f" 2>/dev/null || sudo rm -f "$f" 2>/dev/null || true
-          fi
-        done
-        # Also clean up any failed previous cask install
-        brew uninstall --cask docker 2>/dev/null || true
-        brew install --cask docker < /dev/null
-      else
-        echo "  Downloading Docker Desktop for macOS..."
-        dmg=$(mktemp /tmp/docker-XXXXXX.dmg)
+      # Detect real hardware — uname lies under Rosetta (reports x86_64 on ARM)
+      real_arch="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+      if [ "$real_arch" = "1" ]; then
         arch_suffix="arm64"
-        if [ "$(uname -m)" = "x86_64" ]; then arch_suffix="amd64"; fi
-        _download "https://desktop.docker.com/mac/main/${arch_suffix}/Docker.dmg" "$dmg"
-        echo "  Mounting installer..."
-        hdiutil attach "$dmg" -quiet -nobrowse -mountpoint /Volumes/Docker < /dev/null
-        echo "  Installing (may require your password)..."
-        sudo cp -R /Volumes/Docker/Docker.app /Applications/ < /dev/null
-        hdiutil detach /Volumes/Docker -quiet
-        rm -f "$dmg"
+      else
+        arch_suffix="amd64"
       fi
+
+      echo "  Installing Docker Desktop for macOS ($arch_suffix)..."
+      echo "  (this downloads ~700MB — may take a few minutes)"
+      echo ""
+
+      # Remove any existing Docker binaries from previous installs
+      for f in /usr/local/bin/docker /usr/local/bin/docker-compose \
+               /usr/local/bin/docker-credential-desktop \
+               /usr/local/bin/docker-credential-ecr-login \
+               /usr/local/bin/docker-credential-osxkeychain \
+               /usr/local/bin/com.docker.cli \
+               /usr/local/bin/kubectl.docker /usr/local/bin/hub-tool \
+               /usr/local/bin/docker-index /usr/local/bin/hyperkit; do
+        if [ -e "$f" ] || [ -L "$f" ]; then
+          rm -f "$f" 2>/dev/null || sudo rm -f "$f" 2>/dev/null || true
+        fi
+      done
+      brew uninstall --cask docker 2>/dev/null || true
+
+      dmg=$(mktemp /tmp/docker-XXXXXX.dmg)
+      echo "  Downloading Docker Desktop..."
+      _download "https://desktop.docker.com/mac/main/${arch_suffix}/Docker.dmg" "$dmg"
+      echo "  Mounting installer..."
+      hdiutil attach "$dmg" -quiet -nobrowse -mountpoint /Volumes/Docker < /dev/null
+      echo "  Installing (may require your password)..."
+      sudo cp -R /Volumes/Docker/Docker.app /Applications/ < /dev/null
+      hdiutil detach /Volumes/Docker -quiet
+      rm -f "$dmg"
+      info "Docker Desktop installed"
       ;;
     Linux)
       echo "  Installing Docker Engine via get.docker.com..."
