@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Ix — Standalone Installer
 #
 # Installs everything needed to run Ix without cloning the repo:
@@ -14,7 +14,7 @@
 #   IX_VERSION=0.2.0          Override version (default: latest)
 #   IX_SKIP_BACKEND=1         Skip Docker backend setup
 
-set -euo pipefail
+set -eu
 
 # -- Config --
 
@@ -23,7 +23,6 @@ GITHUB_REPO="Ix"
 GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main"
 
 IX_HOME="${IX_HOME:-$HOME/.ix}"
-IX_DATA="$IX_HOME/data"
 COMPOSE_DIR="$IX_HOME/backend"
 
 HEALTH_URL="http://localhost:8090/v1/health"
@@ -31,32 +30,21 @@ ARANGO_URL="http://localhost:8529/_api/version"
 
 NODE_MIN_MAJOR=18
 
-if [[ "$(uname -s)" =~ MINGW|MSYS|CYGWIN ]]; then
-  export IX_HOST_MOUNT_ROOT="$(cygpath -m "$HOME")"
-  export IX_CONTAINER_MOUNT_ROOT="${HOME}"
-  dc() {
-    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker compose "$@"
-  }
-else
-  export IX_HOST_MOUNT_ROOT="${HOME}"
-  export IX_CONTAINER_MOUNT_ROOT="${HOME}"
-  dc() { docker compose "$@"; }
-fi
+# -- Windows / POSIX docker compose wrapper --
 
-# Pick a bin dir that's already in PATH and writable
-pick_bin_dir() {
-  # Prefer /usr/local/bin (already in PATH everywhere)
-  if [ -w "/usr/local/bin" ] || [ -w "/usr/local" ]; then
-    echo "/usr/local/bin"
-    return
-  fi
-  # Fallback to ~/.local/bin
-  mkdir -p "$HOME/.local/bin"
-  echo "$HOME/.local/bin"
-}
-
-IX_BIN="$(pick_bin_dir)"
-
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    IX_HOST_MOUNT_ROOT="$(cygpath -m "$HOME")"
+    export IX_HOST_MOUNT_ROOT
+    export IX_CONTAINER_MOUNT_ROOT="${HOME}"
+    dc() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker compose "$@"; }
+    ;;
+  *)
+    export IX_HOST_MOUNT_ROOT="${HOME}"
+    export IX_CONTAINER_MOUNT_ROOT="${HOME}"
+    dc() { docker compose "$@"; }
+    ;;
+esac
 # -- Helpers --
 
 info()  { printf "  \033[32m[ok]\033[0m %s\n" "$*"; }
@@ -64,23 +52,66 @@ warn()  { printf "  \033[33m[!!]\033[0m %s\n" "$*" >&2; }
 err()   { printf "  \033[31m[error]\033[0m %s\n" "$*" >&2; exit 1; }
 step()  { printf "\n-- %s --\n" "$*"; }
 
+# -- Download helpers (curl or wget) --
+#
+# _fetch URL         — write response to stdout
+# _download URL FILE — write response to FILE
+
+if command -v curl >/dev/null 2>&1; then
+  _fetch()    { curl -fsSL "$1"; }
+  _download() { curl -fsSL "$1" -o "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  _fetch()    { wget -qO- "$1"; }
+  _download() { wget -qO "$2" "$1"; }
+else
+  err "curl or wget is required but neither was found.
+  Install one first and re-run:
+    apt-get install -y curl    # Debian/Ubuntu
+    apk add curl               # Alpine
+    dnf install -y curl        # Fedora/RHEL"
+fi
+
+# Pick a bin dir that is already in PATH and writable
+pick_bin_dir() {
+  if [ -w "/usr/local/bin" ] || [ -w "/usr/local" ]; then
+    echo "/usr/local/bin"
+    return
+  fi
+  mkdir -p "$HOME/.local/bin"
+  echo "$HOME/.local/bin"
+}
+
+IX_BIN="$(pick_bin_dir)"
+
 ensure_path() {
-  # Only needed if using ~/.local/bin
+  # Only needed when using ~/.local/bin
   if [ "$IX_BIN" = "/usr/local/bin" ]; then return; fi
 
-  local path_line='export PATH="$HOME/.local/bin:$PATH"'
-  local rc_files=()
+  # Single quotes intentional: $HOME/$PATH must expand at shell startup, not install time
+  # shellcheck disable=SC2016
+  path_line='export PATH="$HOME/.local/bin:$PATH"'
+  added=0
 
-  [ -f "$HOME/.zshrc" ]  && rc_files+=("$HOME/.zshrc")
-  [ -f "$HOME/.bashrc" ] && rc_files+=("$HOME/.bashrc")
-  [ "${#rc_files[@]}" -eq 0 ] && rc_files=("$HOME/.zshrc")
-
-  for rc in "${rc_files[@]}"; do
-    [ -f "$rc" ] || touch "$rc"
+  # Update any rc files that already exist
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+    [ -f "$rc" ] || continue
     if ! grep -Fq '.local/bin' "$rc" 2>/dev/null; then
       printf '\n# Added by Ix installer\n%s\n' "$path_line" >> "$rc"
     fi
+    added=1
   done
+
+  # No rc files found — fall back to ~/.profile (POSIX login shell)
+  if [ "$added" = "0" ]; then
+    touch "$HOME/.profile"
+    if ! grep -Fq '.local/bin' "$HOME/.profile" 2>/dev/null; then
+      printf '\n# Added by Ix installer\n%s\n' "$path_line" >> "$HOME/.profile"
+    fi
+    echo "  Note: ~/.local/bin added to PATH in ~/.profile"
+  fi
+
+  echo "  Run this to use ix now (or open a new terminal):"
+  echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 }
 
 # -- Resolve version --
@@ -91,14 +122,11 @@ resolve_version() {
     return
   fi
 
-  if command -v curl >/dev/null 2>&1; then
-    local latest
-    latest=$(curl -fsSL "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest" 2>/dev/null \
-      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' || true)
-    if [ -n "$latest" ]; then
-      echo "$latest"
-      return
-    fi
+  latest=$(_fetch "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' || true)
+  if [ -n "$latest" ]; then
+    echo "$latest"
+    return
   fi
 
   echo "0.1.0"
@@ -107,7 +135,6 @@ resolve_version() {
 # -- Detect platform --
 
 detect_platform() {
-  local os arch
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
 
@@ -121,7 +148,7 @@ detect_platform() {
   case "$arch" in
     x86_64|amd64) arch="amd64" ;;
     arm64|aarch64) arch="arm64" ;;
-    *)             err "Unsupported architecture: $arch" ;;
+    *)             err "Unsupported architecture: $arch. Supported: x86_64, arm64" ;;
   esac
 
   echo "${os}-${arch}"
@@ -151,7 +178,7 @@ node_version_major() {
 }
 
 install_or_upgrade_node() {
-  local action="$1"  # "Installing" or "Upgrading"
+  action="$1"  # "Installing" or "Upgrading"
   case "$(uname -s)" in
     Darwin)
       if command -v brew >/dev/null 2>&1; then
@@ -176,18 +203,16 @@ install_or_upgrade_node() {
         fi
       else
         echo "  ${action} Node.js via official installer..."
-        local node_pkg arch node_ver
         node_pkg=$(mktemp /tmp/node-XXXXXX.pkg)
-        arch="$(uname -m)"
-        # Resolve latest LTS version dynamically
-        node_ver=$(curl -fsSL "https://nodejs.org/dist/index.json" \
+        node_arch="$(uname -m)"
+        node_ver=$(_fetch "https://nodejs.org/dist/index.json" \
           | sed -n 's/.*"version":"v\([^"]*\)".*"lts":[^f].*/\1/p' \
-          | head -1)
+          | head -1 || true)
         if [ -z "$node_ver" ]; then node_ver="22.14.0"; fi
-        if [ "$arch" = "arm64" ]; then
-          curl -fsSL "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-darwin-arm64.pkg" -o "$node_pkg"
+        if [ "$node_arch" = "arm64" ]; then
+          _download "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-darwin-arm64.pkg" "$node_pkg"
         else
-          curl -fsSL "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-darwin-x64.pkg" -o "$node_pkg"
+          _download "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-darwin-x64.pkg" "$node_pkg"
         fi
         sudo installer -pkg "$node_pkg" -target / < /dev/null
         rm -f "$node_pkg"
@@ -196,21 +221,23 @@ install_or_upgrade_node() {
     Linux)
       if command -v apt-get >/dev/null 2>&1; then
         echo "  ${action} Node.js via NodeSource (apt)..."
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - < /dev/null
+        _fetch https://deb.nodesource.com/setup_22.x | sudo -E bash -
         sudo apt-get install -y nodejs < /dev/null
       elif command -v dnf >/dev/null 2>&1; then
         echo "  ${action} Node.js via NodeSource (dnf)..."
-        curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - < /dev/null
+        _fetch https://rpm.nodesource.com/setup_22.x | sudo bash -
         sudo dnf install -y nodejs < /dev/null
       elif command -v yum >/dev/null 2>&1; then
         echo "  ${action} Node.js via NodeSource (yum)..."
-        curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - < /dev/null
+        _fetch https://rpm.nodesource.com/setup_22.x | sudo bash -
         sudo yum install -y nodejs < /dev/null
       elif command -v apk >/dev/null 2>&1; then
         echo "  ${action} Node.js via apk..."
         sudo apk add --update nodejs npm < /dev/null
       else
-        err "Could not detect a supported package manager (apt, dnf, yum, apk). Install Node.js ${NODE_MIN_MAJOR}+ manually: https://nodejs.org/"
+        err "No supported package manager found (apt, dnf, yum, apk).
+  Install Node.js ${NODE_MIN_MAJOR}+ manually, then re-run:
+    https://nodejs.org/en/download/"
       fi
       ;;
     MINGW*|MSYS*|CYGWIN*)
@@ -233,7 +260,6 @@ if command -v node >/dev/null 2>&1; then
   else
     warn "Node.js $(node -v) is too old (>= ${NODE_MIN_MAJOR} required)"
     install_or_upgrade_node "Upgrading"
-    # Re-check after upgrade
     if ! command -v node >/dev/null 2>&1; then
       err "Node.js upgrade failed. Install Node.js ${NODE_MIN_MAJOR}+ manually: https://nodejs.org/"
     fi
@@ -251,7 +277,8 @@ else
     # Try common install locations
     for p in /usr/local/bin/node /opt/homebrew/bin/node; do
       if [ -x "$p" ]; then
-        export PATH="$(dirname "$p"):$PATH"
+        _bindir="$(dirname "$p")"
+        export PATH="$_bindir:$PATH"
         break
       fi
     done
@@ -273,7 +300,7 @@ else
     info "Docker is installed"
   else
     echo ""
-    echo "  Docker is required to run the IX backend (ArangoDB + Memory Layer)."
+    echo "  Docker is required to run the Ix backend (ArangoDB + Memory Layer)."
     echo ""
     case "$(uname -s)" in
       Darwin)
@@ -296,7 +323,10 @@ else
         ;;
     esac
     echo ""
-    err "Install Docker and re-run this installer."
+    echo "  To install the CLI only (no backend):"
+    echo "    IX_SKIP_BACKEND=1 sh install.sh"
+    echo ""
+    err "Install Docker and re-run, or set IX_SKIP_BACKEND=1 to skip."
   fi
 
   if ! docker info < /dev/null >/dev/null 2>&1; then
@@ -308,10 +338,12 @@ else
         if [ -d "/Applications/Docker.app" ]; then
           open -a Docker
           echo "  Waiting for Docker to start (this can take 30-60 seconds)..."
-          for i in $(seq 1 30); do
+          i=0
+          while [ "$i" -lt 30 ]; do
             if docker info < /dev/null >/dev/null 2>&1; then break; fi
             printf "."
             sleep 2
+            i=$((i + 1))
           done
           echo ""
         fi
@@ -332,7 +364,7 @@ step "3. Backend (ArangoDB + Memory Layer)"
 if [ "${IX_SKIP_BACKEND:-}" = "1" ]; then
   echo "  (skipped via IX_SKIP_BACKEND=1)"
 else
-  if curl -sf "$HEALTH_URL" >/dev/null 2>&1 && curl -sf "$ARANGO_URL" >/dev/null 2>&1; then
+  if _fetch "$HEALTH_URL" >/dev/null 2>&1 && _fetch "$ARANGO_URL" >/dev/null 2>&1; then
     info "Backend is already running and healthy"
   else
     if command -v lsof >/dev/null 2>&1; then
@@ -349,7 +381,7 @@ else
 
     mkdir -p "$COMPOSE_DIR"
 
-    curl -fsSL "${GITHUB_RAW}/docker-compose.standalone.yml" -o "$COMPOSE_DIR/docker-compose.yml"
+    _download "${GITHUB_RAW}/docker-compose.standalone.yml" "$COMPOSE_DIR/docker-compose.yml"
     info "Downloaded docker-compose.yml"
 
     printf "  Starting backend services (this may take a minute on first run)..."
@@ -363,16 +395,18 @@ else
     echo ""
 
     printf "  Waiting for services to become healthy..."
-    for i in $(seq 1 30); do
-      if curl -sf "$HEALTH_URL" >/dev/null 2>&1 && curl -sf "$ARANGO_URL" >/dev/null 2>&1; then
+    i=0
+    while [ "$i" -lt 30 ]; do
+      if _fetch "$HEALTH_URL" >/dev/null 2>&1 && _fetch "$ARANGO_URL" >/dev/null 2>&1; then
         break
       fi
       printf "."
       sleep 2
+      i=$((i + 1))
     done
     echo ""
 
-    if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
+    if _fetch "$HEALTH_URL" >/dev/null 2>&1; then
       info "Backend is ready"
     else
       warn "Backend may still be starting — check: docker compose -f $COMPOSE_DIR/docker-compose.yml logs"
@@ -403,7 +437,7 @@ for old_ix in "$HOME/.local/bin/ix" "/usr/local/bin/ix"; do
 done
 
 # Check if already installed at correct version
-# On Windows, avoid invoking the shim (calls cmd.exe, hangs in bash subshell)
+# On Windows, avoid invoking the shim (calls cmd.exe, hangs in sh subshell)
 check_installed_version() {
   if [ "$PLATFORM" = "windows-amd64" ]; then
     if [ -d "$INSTALL_DIR/ix-${VERSION}-windows-amd64" ]; then
@@ -433,15 +467,18 @@ if [ ! -x "$IX_BIN/ix" ] || [ "$(check_installed_version)" != "$VERSION" ]; then
   TMP_FILE="$TMP_DIR/${TARBALL_NAME}"
 
   echo "  Downloading ix CLI v${VERSION} for ${PLATFORM}..."
-  if ! curl -fsSL "$TARBALL_URL" -o "$TMP_FILE" 2>/dev/null; then
+  echo "  URL: $TARBALL_URL"
+  if ! _download "$TARBALL_URL" "$TMP_FILE" 2>/dev/null; then
     rm -rf "$TMP_DIR"
     echo ""
     warn "Could not download pre-built CLI from:"
     warn "  $TARBALL_URL"
     echo ""
-    echo "  This likely means the release asset hasn't been uploaded yet."
-    echo "  You can build from source instead:"
+    echo "  This likely means the release asset has not been uploaded yet."
+    echo "  Check available releases at:"
+    echo "    https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases"
     echo ""
+    echo "  Or build from source:"
     echo "    git clone https://github.com/${GITHUB_ORG}/${GITHUB_REPO}.git"
     echo "    cd ${GITHUB_REPO} && ./setup.sh"
     echo ""
@@ -457,16 +494,16 @@ if [ ! -x "$IX_BIN/ix" ] || [ "$(check_installed_version)" != "$VERSION" ]; then
   rm -rf "$TMP_DIR"
   info "Extracted CLI"
 
-  # Create wrapper in bin dir
+  # Create wrapper shim in bin dir
   if [ "$PLATFORM" = "windows-amd64" ]; then
     IX_JS="$INSTALL_DIR/ix-${VERSION}-windows-amd64/cli/dist/cli/main.js"
     cat > "$IX_BIN/ix" <<SHIM
-#!/usr/bin/env bash
+#!/bin/sh
 exec node "$IX_JS" "\$@"
 SHIM
   else
     cat > "$IX_BIN/ix" <<SHIM
-#!/usr/bin/env bash
+#!/bin/sh
 exec "$INSTALL_DIR/ix" "\$@"
 SHIM
   fi
@@ -504,7 +541,7 @@ elif [ -x "$IX_BIN/ix" ]; then
     echo "  Open a new terminal for 'ix' to be in your PATH"
   fi
 else
-  warn "ix not found"
+  warn "ix not found in PATH — something may have gone wrong"
 fi
 
 echo ""

@@ -1,5 +1,4 @@
-#!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
+#!/bin/sh
 # Ix — Uninstaller
 #
 # Removes everything installed by the Ix installer:
@@ -11,9 +10,8 @@
 #
 # Options (env vars):
 #   IX_KEEP_DATA=1    Keep ArangoDB data volume (default: remove everything)
-# ─────────────────────────────────────────────────────────────────────────────
 
-set -euo pipefail
+set -eu
 
 IX_HOME="${IX_HOME:-$HOME/.ix}"
 IX_BIN="$HOME/.local/bin"
