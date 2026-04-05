@@ -401,6 +401,12 @@ step "2. Docker + Docker Compose"
 install_docker() {
   case "$(uname -s)" in
     Darwin)
+      # Kill any lingering Docker processes from a previous install/run
+      osascript -e 'quit app "Docker"' 2>/dev/null || true
+      pkill -f "Docker Desktop" 2>/dev/null || true
+      pkill -f "com.docker" 2>/dev/null || true
+      sleep 1
+
       # Detect real hardware — uname lies under Rosetta (reports x86_64 on ARM)
       real_arch="$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
       if [ "$real_arch" = "1" ]; then
