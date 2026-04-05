@@ -542,8 +542,12 @@ function cleanHeadingName(raw: string): string {
   // 3. Protect inline code spans from HTML stripping
   const spans: string[] = [];
   s = s.replace(/`[^`]+`/g, (m) => { spans.push(m); return `\x00${spans.length - 1}\x00`; });
-  // 4. Strip HTML tags (decorative badges, <sup>, etc.)
-  s = s.replace(/<[^>]+>/g, '');
+  // 4. Strip HTML tags (iteratively to handle split tags like <scr<x>ipt>).
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/<[^>]+>/g, '');
+  } while (s !== prev);
   // 5. Restore inline code spans and strip their backtick delimiters
   s = s.replace(/\x00(\d+)\x00/g, (_, i) => spans[Number(i)].replace(/`/g, ''));
   // 6. Restore escaped angle brackets
@@ -600,8 +604,11 @@ function parseMarkdownFile(filePath: string, source: string): FileParseResult {
 
   // headingStack[level] = heading name currently active at that depth (1–6)
   const headingStack: (string | null)[] = [null, null, null, null, null, null, null];
-  const headingPattern = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/;
-  const htmlHeadingPattern = /^<h([1-6])\b[^>]*>(.*?)<\/h\1>\s*$/i;
+  // (.*\S) captures up to the last non-whitespace — avoids \s*$ overlap (ReDoS).
+  // Closing ## markers are stripped below after capture.
+  const headingPattern = /^(#{1,6})\s+(.*\S)/;
+  // Greedy .* with specific closing tag as anchor avoids (.*?)\s*$ overlap (ReDoS).
+  const htmlHeadingPattern = /^<h([1-6])\b[^>]*>(.*)<\/h\1>/i;
   const headingLines: { level: number; name: string; lineNum: number; container: string | null }[] = [];
 
   // Bug 3 fix: track opening fence char+length so only matching delimiter closes the block
@@ -639,7 +646,8 @@ function parseMarkdownFile(filePath: string, source: string): FileParseResult {
     if (!headingMatch && !htmlHeadingMatch && setextLevel === null) continue;
 
     const level = headingMatch ? headingMatch[1].length : (htmlHeadingMatch ? Number(htmlHeadingMatch![1]) : setextLevel!);
-    const rawName = headingMatch ? headingMatch[2] : (htmlHeadingMatch ? htmlHeadingMatch![2] : line.trim());
+    // Strip optional ATX closing markers (e.g. "Title ##") that (.*\S) now includes.
+    const rawName = headingMatch ? headingMatch[2].replace(/\s+#+$/, '') : (htmlHeadingMatch ? htmlHeadingMatch![2] : line.trim());
     const name = cleanHeadingName(rawName);
     if (!name) continue;
     const lineNum = i + 1;
