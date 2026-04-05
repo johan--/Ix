@@ -367,8 +367,15 @@ install_docker() {
   case "$(uname -s)" in
     Darwin)
       if command -v brew >/dev/null 2>&1; then
-        echo "  Installing Docker Desktop via Homebrew..."
-        brew install --cask docker < /dev/null
+        echo "  Installing Docker Desktop via Homebrew (this can take a few minutes)..."
+        brew install --cask docker < /dev/null > /dev/null 2>&1 &
+        BREW_PID=$!
+        while kill -0 "$BREW_PID" 2>/dev/null; do
+          printf "."
+          sleep 2
+        done
+        wait "$BREW_PID" || true
+        echo ""
       else
         echo "  Downloading Docker Desktop for macOS..."
         dmg=$(mktemp /tmp/docker-XXXXXX.dmg)
