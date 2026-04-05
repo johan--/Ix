@@ -404,8 +404,16 @@ install_docker() {
       _download "https://desktop.docker.com/mac/main/${arch_suffix}/Docker.dmg" "$dmg"
       echo "  Mounting installer..."
       hdiutil attach "$dmg" -quiet -nobrowse -mountpoint /Volumes/Docker < /dev/null
-      echo "  Installing (may require your password)..."
-      sudo cp -R /Volumes/Docker/Docker.app /Applications/ < /dev/null
+      echo "  Copying to /Applications (may require your password)..."
+      sudo rm -rf /Applications/Docker.app 2>/dev/null || true
+      sudo cp -R /Volumes/Docker/Docker.app /Applications/ < /dev/null &
+      CP_PID=$!
+      while kill -0 "$CP_PID" 2>/dev/null; do
+        printf "."
+        sleep 1
+      done
+      wait "$CP_PID" || true
+      echo " done"
       hdiutil detach /Volumes/Docker -quiet
       rm -f "$dmg"
       info "Docker Desktop installed"
