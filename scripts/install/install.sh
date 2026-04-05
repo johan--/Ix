@@ -547,77 +547,75 @@ start_docker_daemon() {
 if [ "${IX_SKIP_BACKEND:-}" = "1" ]; then
   echo "  (skipped via IX_SKIP_BACKEND=1)"
 else
-  if ! command -v docker >/dev/null 2>&1; then
+  # Install Docker if missing
+  if ! command -v docker >/dev/null 2>&1 && ! [ -x "/usr/local/bin/docker" ]; then
     install_docker
-    hash -r 2>/dev/null || true
-    # On macOS, Docker Desktop creates CLI symlinks only on first launch.
-    # Start it now and wait for the symlinks to appear.
-    if [ -d "/Applications/Docker.app" ] && ! command -v docker >/dev/null 2>&1; then
-      echo "  Launching Docker Desktop to set up CLI tools..."
+  fi
+
+  # On macOS, Docker Desktop must be launched and the user must accept
+  # the license before the docker CLI and daemon become available.
+  # Open it, tell the user what to do, and wait.
+  if [ -d "/Applications/Docker.app" ]; then
+    if ! [ -x "/usr/local/bin/docker" ] || ! docker info < /dev/null >/dev/null 2>&1; then
       open -g -a Docker
       osascript -e 'tell application "Docker" to activate' 2>/dev/null || true
-      printf "  Waiting for docker CLI to become available..."
+      echo ""
+      echo "  ┌─────────────────────────────────────────────────────────────┐"
+      echo "  │  Docker Desktop is open. Complete the setup in its window:  │"
+      echo "  │                                                             │"
+      echo "  │  1. Accept the license agreement                            │"
+      echo "  │  2. Skip sign-in (or sign in — it's optional)              │"
+      echo "  │  3. Wait for the engine to start                            │"
+      echo "  │     (whale icon in menu bar stops animating)                │"
+      echo "  │                                                             │"
+      echo "  │  This installer will continue automatically.                │"
+      echo "  └─────────────────────────────────────────────────────────────┘"
+      echo ""
+      printf "  Waiting for Docker to be ready..."
       i=0
-      while [ "$i" -lt 90 ]; do
-        # Check the actual file — shell hash cache can hide it from command -v
+      while [ "$i" -lt 180 ]; do
         if [ -x "/usr/local/bin/docker" ]; then
           export PATH="/usr/local/bin:$PATH"
+          hash -r 2>/dev/null || true
+        fi
+        if command -v docker >/dev/null 2>&1 && docker info < /dev/null >/dev/null 2>&1; then
           break
         fi
-        hash -r 2>/dev/null || true
-        if command -v docker >/dev/null 2>&1; then break; fi
         printf "."
         sleep 2
         i=$((i + 1))
       done
       echo ""
     fi
-    # Final PATH check
-    if ! command -v docker >/dev/null 2>&1; then
-      for p in /usr/local/bin /opt/homebrew/bin; do
-        if [ -x "$p/docker" ]; then
-          export PATH="$p:$PATH"
-          break
+  fi
+
+  # Linux: start daemon if not running
+  case "$(uname -s)" in
+    Linux)
+      if command -v docker >/dev/null 2>&1 && ! docker info < /dev/null >/dev/null 2>&1; then
+        if command -v systemctl >/dev/null 2>&1; then
+          echo "  Starting Docker daemon..."
+          sudo systemctl start docker < /dev/null 2>/dev/null || true
+          sleep 2
         fi
-      done
-    fi
-    if ! command -v docker >/dev/null 2>&1; then
-      # Docker Desktop is installed but symlinks haven't appeared yet.
-      # This can happen if the user hasn't accepted the license yet.
-      # Don't error — proceed to start_docker_daemon which handles this.
-      warn "docker CLI not in PATH yet — Docker Desktop may need setup"
-    else
-      info "Docker installed"
-    fi
-  else
-    info "Docker is installed"
-  fi
+        if ! docker info < /dev/null >/dev/null 2>&1; then
+          if sudo docker info < /dev/null >/dev/null 2>&1; then
+            echo "  Docker requires sudo (group not yet active). Using sudo for this session."
+            dc() { sudo docker compose "$@"; }
+          fi
+        fi
+      fi
+      ;;
+  esac
 
-  # If docker CLI still isn't available, Docker Desktop needs the user
-  # to accept the license. start_docker_daemon handles this with a prompt.
-  if ! command -v docker >/dev/null 2>&1 && [ -d "/Applications/Docker.app" ]; then
-    start_docker_daemon
-    # After ToS accepted, symlinks should exist now
-    if [ -x "/usr/local/bin/docker" ]; then
-      export PATH="/usr/local/bin:$PATH"
-    fi
-  fi
-
-  if command -v docker >/dev/null 2>&1 && ! docker info < /dev/null >/dev/null 2>&1; then
-    start_docker_daemon
-    if ! docker info < /dev/null >/dev/null 2>&1 && ! sudo docker info < /dev/null >/dev/null 2>&1; then
-      echo ""
-      echo "  Could not start Docker automatically."
-      echo "  To install the CLI only (no backend):"
-      echo "    IX_SKIP_BACKEND=1 sh install.sh"
-      err "Docker daemon is not running. Start it and re-run."
-    fi
-  fi
-
+  # Final check — docker must be working by now
   if ! command -v docker >/dev/null 2>&1; then
-    err "Docker installation failed. Install manually: https://docs.docker.com/engine/install/"
+    err "Docker not found. Restart your terminal and re-run this installer."
   fi
-  info "Docker daemon is running"
+  if ! docker info < /dev/null >/dev/null 2>&1; then
+    err "Docker is not running. Start Docker Desktop and re-run this installer."
+  fi
+  info "Docker is ready"
 
   if ! docker compose version >/dev/null 2>&1; then
     err "Docker Compose v2 is required. Update Docker or install the compose plugin."
