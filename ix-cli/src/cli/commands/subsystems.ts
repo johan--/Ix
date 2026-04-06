@@ -104,6 +104,10 @@ Examples:
         let result: any;
         try {
           result = await client.listSubsystems();
+          // Auto-trigger scoring if no persisted scores exist yet
+          if ((result.scores ?? []).length === 0) {
+            result = await client.scoreSubsystems();
+          }
         } catch (err: any) {
           console.error(chalk.red("Error:"), err.message);
           process.exitCode = 1;
@@ -163,6 +167,9 @@ Examples:
         let scoreResult: { scores?: SubsystemScore[] };
         try {
           scoreResult = await client.listSubsystems();
+          if ((scoreResult.scores ?? []).length === 0) {
+            scoreResult = await client.scoreSubsystems();
+          }
         } catch (err: any) {
           console.error(chalk.red("Error:"), err.message);
           process.exitCode = 1;
