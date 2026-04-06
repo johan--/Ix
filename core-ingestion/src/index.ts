@@ -514,7 +514,7 @@ function parseDockerfileFile(filePath: string, source: string): FileParseResult 
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    const trimmedEnd = line.replace(/\s+$/, '');
+    const trimmedEnd = line.trimEnd();
     const lineContent = pending ? `${pending}\n${line}` : line;
     if (!pending) logicalStartLine = index + 1;
 
