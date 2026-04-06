@@ -551,10 +551,20 @@ function parseDockerfileFile(filePath: string, source: string): FileParseResult 
 
 /** Strip -- line comments and /* block comments *\/ from SQL source. */
 function stripSqlComments(source: string): string {
-  // Block comments first, then line comments
-  return source
-    .replace(/\/\*(?:[^*]|\*[^/])*\*\//g, match => match.replace(/[^\n]/g, ' '))
-    .replace(/--[^\n]*/g, match => ' '.repeat(match.length));
+  // Block comments: use indexOf to avoid ReDoS from regex backtracking
+  let result = '';
+  let i = 0;
+  while (i < source.length) {
+    const start = source.indexOf('/*', i);
+    if (start === -1) { result += source.slice(i); break; }
+    result += source.slice(i, start);
+    const end = source.indexOf('*/', start + 2);
+    if (end === -1) { result += source.slice(start).replace(/[^\n]/g, ' '); break; }
+    result += source.slice(start, end + 2).replace(/[^\n]/g, ' ');
+    i = end + 2;
+  }
+  // Line comments: [^\n]* is always linear (no backtracking possible)
+  return result.replace(/--[^\n]*/g, match => ' '.repeat(match.length));
 }
 
 /** Extract unquoted table/view names following FROM, JOIN variants, INTO, UPDATE, REFERENCES. */
