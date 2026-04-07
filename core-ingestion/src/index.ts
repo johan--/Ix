@@ -213,7 +213,7 @@ function builtinsForLanguage(lang: SupportedLanguages): Set<string> {
 export function isGrammarSupported(filePath: string): boolean {
   const language = languageFromPath(filePath);
   if (!language) return false;
-  if (language === SupportedLanguages.YAML || language === SupportedLanguages.Dockerfile || language === SupportedLanguages.SQL || language === SupportedLanguages.JSON) return true;
+  if (language === SupportedLanguages.YAML || language === SupportedLanguages.Dockerfile || language === SupportedLanguages.SQL || language === SupportedLanguages.JSON || language === SupportedLanguages.TOML || language === SupportedLanguages.Markdown) return true;
   if (filePath.endsWith('.tsx')) return true; // TSX uses TypeScript.tsx, always available
   return GRAMMAR_MAP[language] !== undefined;
 }
@@ -386,6 +386,345 @@ function parseYamlFile(filePath: string, source: string): FileParseResult {
     relationships,
     fileRole,
   };
+}
+
+function parseTomlFile(filePath: string, source: string): FileParseResult {
+  const language = SupportedLanguages.TOML;
+  const fileName = nodePath.basename(filePath);
+  const sourceLineCount = countSourceLines(source);
+  const fileRole = classifyFileRole(filePath);
+  const entities: ParsedEntity[] = [
+    { name: fileName, kind: 'file', lineStart: 1, lineEnd: sourceLineCount, language },
+  ];
+  const chunks: ParsedChunk[] = [];
+  const relationships: ParsedRelationship[] = [];
+  const lineStarts = computeLineStarts(source);
+  const lines = source.split(/\r?\n/);
+
+  // [table] or [[array-of-tables]] headers set the current section context.
+  const tableHeaderPattern = /^\s*\[{1,2}([^\[\]]+)\]{1,2}\s*(?:#.*)?$/;
+  // key = value lines (bare keys, quoted keys, dotted keys).
+  // Quoted keys handled separately to avoid ReDoS from spaces overlapping with \s*.
+  const keyPattern = /^\s*("[^"]*"|'[^']*'|[A-Za-z0-9_-][A-Za-z0-9_.-]*)\s*=/;
+
+  let currentTable: string | null = null;
+  const seenTablePaths = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const tableMatch = tableHeaderPattern.exec(line);
+    if (tableMatch) {
+      const tablePath = tableMatch[1].trim();
+      currentTable = tablePath;
+      const parts = tablePath.split('.');
+      const lineNumber = i + 1;
+      const startByte = lineStarts[i] ?? 0;
+
+      // Emit intermediate nodes for each prefix segment (e.g. [a.b.c] → emit a, a.b)
+      for (let p = 1; p < parts.length; p++) {
+        const prefixPath = parts.slice(0, p).join('.');
+        if (!seenTablePaths.has(prefixPath)) {
+          seenTablePaths.add(prefixPath);
+          const prefixKey = parts[p - 1];
+          const prefixParent = p > 1 ? parts.slice(0, p - 1).join('.') : null;
+          entities.push({
+            name: prefixKey,
+            kind: 'config_entry',
+            lineStart: lineNumber,
+            lineEnd: lineNumber,
+            language,
+            container: prefixParent ?? undefined,
+          });
+          relationships.push({
+            srcName: prefixParent ?? fileName,
+            dstName: prefixKey,
+            predicate: 'CONTAINS',
+          });
+        }
+      }
+
+      const key = parts[parts.length - 1];
+      const parent = parts.length > 1 ? parts.slice(0, -1).join('.') : null;
+
+      seenTablePaths.add(tablePath);
+      entities.push({
+        name: key,
+        kind: 'config_entry',
+        lineStart: lineNumber,
+        lineEnd: lineNumber,
+        language,
+        container: parent ?? undefined,
+      });
+      chunks.push({
+        name: key,
+        chunkKind: 'config_key',
+        lineStart: lineNumber,
+        lineEnd: lineNumber,
+        startByte,
+        endByte: startByte + line.length,
+        contentHash: crypto.createHash('sha256').update(line).digest('hex'),
+        language,
+        container: parent ?? undefined,
+      });
+      relationships.push({
+        srcName: parent ?? fileName,
+        dstName: key,
+        predicate: 'CONTAINS',
+      });
+      continue;
+    }
+
+    const keyMatch = keyPattern.exec(line);
+    if (keyMatch) {
+      const key = keyMatch[1].trim().replace(/^["']|["']$/g, '');
+      const lineNumber = i + 1;
+      const startByte = lineStarts[i] ?? 0;
+
+      entities.push({
+        name: key,
+        kind: 'config_entry',
+        lineStart: lineNumber,
+        lineEnd: lineNumber,
+        language,
+        container: currentTable ?? undefined,
+      });
+      chunks.push({
+        name: key,
+        chunkKind: 'config_key',
+        lineStart: lineNumber,
+        lineEnd: lineNumber,
+        startByte,
+        endByte: startByte + line.length,
+        contentHash: crypto.createHash('sha256').update(line).digest('hex'),
+        language,
+        container: currentTable ?? undefined,
+      });
+      relationships.push({
+        srcName: currentTable ?? fileName,
+        dstName: key,
+        predicate: 'CONTAINS',
+      });
+    }
+  }
+
+  if (chunks.length === 0) {
+    chunks.push({
+      name: null,
+      chunkKind: 'file_body',
+      lineStart: 1,
+      lineEnd: Math.max(sourceLineCount, 1),
+      startByte: 0,
+      endByte: source.length,
+      contentHash: crypto.createHash('sha256').update(source).digest('hex'),
+      language,
+    });
+  }
+
+  return { filePath, language, entities, chunks, relationships, fileRole };
+}
+
+function cleanHeadingName(raw: string): string {
+  // 1. Strip VitePress anchor ID suffix {#...}
+  // Use string methods to avoid ReDoS from overlapping \s* / [^}]+ quantifiers.
+  let s = raw;
+  const anchorStart = raw.lastIndexOf('{#');
+  if (anchorStart !== -1) {
+    const closeIdx = raw.indexOf('}', anchorStart + 2);
+    if (closeIdx !== -1 && raw.slice(closeIdx + 1).trim() === '') {
+      s = raw.slice(0, anchorStart).trimEnd();
+    }
+  }
+  // 2. Unescape backslash-escaped angle brackets before HTML stripping
+  s = s.replace(/\\</g, '\x01LT\x01').replace(/\\>/g, '\x01GT\x01');
+  // 3. Protect inline code spans from HTML stripping
+  const spans: string[] = [];
+  s = s.replace(/`[^`]+`/g, (m) => { spans.push(m); return `\x00${spans.length - 1}\x00`; });
+  // 4. Strip HTML tags (iteratively to handle split tags like <scr<x>ipt>).
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(/<[^>]+>/g, '');
+  } while (s !== prev);
+  // 5. Restore inline code spans and strip their backtick delimiters
+  s = s.replace(/\x00(\d+)\x00/g, (_, i) => spans[Number(i)].replace(/`/g, ''));
+  // 6. Restore escaped angle brackets
+  s = s.replace(/\x01LT\x01/g, '<').replace(/\x01GT\x01/g, '>');
+  // 7. Strip VitePress stability markers (\* \*\* \*\*\*)
+  s = s.replace(/\\\*+/g, '');
+  // 8. Normalize whitespace
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  return s;
+}
+
+function parseMarkdownFile(filePath: string, source: string): FileParseResult {
+  const language = SupportedLanguages.Markdown;
+  const fileName = nodePath.basename(filePath);
+  const sourceLineCount = countSourceLines(source);
+  const fileRole = classifyFileRole(filePath);
+  const entities: ParsedEntity[] = [
+    { name: fileName, kind: 'file', lineStart: 1, lineEnd: sourceLineCount, language },
+  ];
+  const chunks: ParsedChunk[] = [];
+  const relationships: ParsedRelationship[] = [];
+  const lineStarts = computeLineStarts(source);
+  const lines = source.split(/\r?\n/);
+
+  let startLine = 0;
+
+  // Parse YAML frontmatter delimited by --- ... ---
+  if (lines[0]?.trim() === '---') {
+    let fmEnd = -1;
+    for (let j = 1; j < lines.length; j++) {
+      if (lines[j].trim() === '---' || lines[j].trim() === '...') {
+        fmEnd = j;
+        break;
+      }
+    }
+    if (fmEnd > 0) {
+      startLine = fmEnd + 1;
+      const endByte = (lineStarts[fmEnd] ?? 0) + lines[fmEnd].length;
+      const fmContent = lines.slice(0, fmEnd + 1).join('\n');
+      entities.push({ name: 'frontmatter', kind: 'frontmatter', lineStart: 1, lineEnd: fmEnd + 1, language });
+      chunks.push({
+        name: 'frontmatter',
+        chunkKind: 'frontmatter',
+        lineStart: 1,
+        lineEnd: fmEnd + 1,
+        startByte: 0,
+        endByte,
+        contentHash: crypto.createHash('sha256').update(fmContent).digest('hex'),
+        language,
+      });
+      relationships.push({ srcName: fileName, dstName: 'frontmatter', predicate: 'CONTAINS' });
+    }
+  }
+
+  // headingStack[level] = heading name currently active at that depth (1–6)
+  const headingStack: (string | null)[] = [null, null, null, null, null, null, null];
+  // \S[^\r\n]* requires content to start with non-whitespace, eliminating the
+  // \s+/(.*\S) overlap that caused polynomial backtracking. Trailing whitespace
+  // and closing ## markers are stripped in code below.
+  const headingPattern = /^(#{1,6})[ \t]+(\S[^\r\n]*)$/;
+  // Greedy .* with specific closing tag as anchor avoids (.*?)\s*$ overlap (ReDoS).
+  const htmlHeadingPattern = /^<h([1-6])\b[^>]*>(.*)<\/h\1>/i;
+  const headingLines: { level: number; name: string; lineNum: number; container: string | null }[] = [];
+
+  // Bug 3 fix: track opening fence char+length so only matching delimiter closes the block
+  let fenceState: { char: string; len: number } | null = null;
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Toggle fenced code block — only close with same character and >= opening length
+    const fenceMatch = /^(`{3,}|~{3,})/.exec(line.trimStart());
+    if (fenceMatch) {
+      const matchChar = fenceMatch[1][0];
+      const matchLen = fenceMatch[1].length;
+      if (fenceState === null) {
+        fenceState = { char: matchChar, len: matchLen };
+      } else if (matchChar === fenceState.char && matchLen >= fenceState.len) {
+        fenceState = null;
+      }
+      continue;
+    }
+    if (fenceState !== null) continue;
+
+    const headingMatch = headingPattern.exec(line);
+    const htmlHeadingMatch = headingMatch ? null : htmlHeadingPattern.exec(line.trim());
+
+    // Bug 2 fix: detect setext-style headings (text line followed by === or --- underline)
+    let setextLevel: number | null = null;
+    if (!headingMatch && !htmlHeadingMatch && line.trim() !== '') {
+      const nextLine = lines[i + 1];
+      if (nextLine !== undefined) {
+        if (/^=+\s*$/.test(nextLine)) setextLevel = 1;
+        else if (/^-+\s*$/.test(nextLine)) setextLevel = 2;
+      }
+    }
+
+    if (!headingMatch && !htmlHeadingMatch && setextLevel === null) continue;
+
+    const level = headingMatch ? headingMatch[1].length : (htmlHeadingMatch ? Number(htmlHeadingMatch![1]) : setextLevel!);
+    // Strip optional ATX closing markers (e.g. "Title ##") that (.*\S) now includes.
+    // Use string walk instead of regex to avoid ReDoS on +#+$ backtracking.
+    let atxRaw = headingMatch ? headingMatch[2].trimEnd() : null;
+    if (atxRaw !== null && atxRaw[atxRaw.length - 1] === '#') {
+      let i = atxRaw.length - 1;
+      while (i >= 0 && atxRaw[i] === '#') i--;
+      if (i >= 0 && (atxRaw[i] === ' ' || atxRaw[i] === '\t')) atxRaw = atxRaw.slice(0, i);
+    }
+    const rawName = atxRaw !== null ? atxRaw : (htmlHeadingMatch ? htmlHeadingMatch![2] : line.trim());
+    const name = cleanHeadingName(rawName);
+    if (!name) continue;
+    const lineNum = i + 1;
+
+    if (setextLevel !== null) i++; // skip the underline line
+
+    // Find nearest ancestor at a shallower level
+    let container: string | null = null;
+    for (let l = level - 1; l >= 1; l--) {
+      if (headingStack[l] !== null) {
+        container = headingStack[l];
+        break;
+      }
+    }
+
+    // Reset all deeper levels when a heading resets scope
+    for (let l = level; l <= 6; l++) headingStack[l] = null;
+    headingStack[level] = name;
+
+    entities.push({ name, kind: 'heading', lineStart: lineNum, lineEnd: lineNum, language, container: container ?? undefined });
+    relationships.push({ srcName: container ?? fileName, dstName: name, predicate: 'CONTAINS' });
+    headingLines.push({ level, name, lineNum, container });
+  }
+
+  // Build one section chunk per heading spanning to the line before the next heading at the same or
+  // shallower level. This ensures parent sections contain their nested sub-sections' content.
+  for (let h = 0; h < headingLines.length; h++) {
+    const { level: currentLevel, name, lineNum, container } = headingLines[h];
+    let nextLineNum = sourceLineCount;
+    for (let k = h + 1; k < headingLines.length; k++) {
+      if (headingLines[k].level <= currentLevel) {
+        nextLineNum = headingLines[k].lineNum - 1;
+        break;
+      }
+    }
+    const startByte = lineStarts[lineNum - 1] ?? 0;
+    const endByte = nextLineNum < lines.length ? (lineStarts[nextLineNum] ?? source.length) : source.length;
+    const sectionContent = lines.slice(lineNum - 1, nextLineNum).join('\n');
+    chunks.push({
+      name,
+      chunkKind: 'section',
+      lineStart: lineNum,
+      lineEnd: nextLineNum,
+      startByte,
+      endByte,
+      contentHash: crypto.createHash('sha256').update(sectionContent).digest('hex'),
+      language,
+      container: container ?? undefined,
+    });
+  }
+
+  // Bug 1 fix: emit file_body when no section chunks exist, regardless of frontmatter chunk
+  if (headingLines.length === 0) {
+    const bodyLineStart = startLine + 1;
+    const bodyStartByte = lineStarts[startLine] ?? 0;
+    const bodyContent = source.slice(bodyStartByte);
+    chunks.push({
+      name: null,
+      chunkKind: 'file_body',
+      lineStart: bodyLineStart,
+      lineEnd: Math.max(sourceLineCount, 1),
+      startByte: bodyStartByte,
+      endByte: source.length,
+      contentHash: crypto.createHash('sha256').update(bodyContent).digest('hex'),
+      language,
+    });
+  }
+
+  return { filePath, language, entities, chunks, relationships, fileRole };
 }
 
 function parseDockerfileFile(filePath: string, source: string): FileParseResult {
@@ -841,6 +1180,8 @@ export function parseFile(filePath: string, source: string): FileParseResult | n
   if (language === SupportedLanguages.Dockerfile) return parseDockerfileFile(filePath, source);
   if (language === SupportedLanguages.SQL) return parseSqlFile(filePath, source);
   if (language === SupportedLanguages.JSON) return parseJsonFile(filePath, source);
+  if (language === SupportedLanguages.TOML) return parseTomlFile(filePath, source);
+  if (language === SupportedLanguages.Markdown) return parseMarkdownFile(filePath, source);
 
   // TypeScript TSX uses a separate grammar
   const isTsx = filePath.endsWith('.tsx');

@@ -14,6 +14,7 @@ export interface WorkspaceConfig {
 export interface IxConfig {
   endpoint: string;
   format: string;
+  workspace?: string;
   workspaces?: WorkspaceConfig[];
 }
 
@@ -59,6 +60,20 @@ export function getDefaultWorkspace(): WorkspaceConfig | undefined {
   return loadWorkspaces().find(w => w.default);
 }
 
+export function getActiveWorkspaceRoot(): string | undefined {
+  const cwd = process.cwd();
+  const nearest = findWorkspaceForCwd(cwd);
+  if (nearest) return nearest.root_path;
+
+  const cfg = loadConfig();
+  if (cfg.workspace) {
+    const named = loadWorkspaces().find(w => w.workspace_name === cfg.workspace);
+    if (named) return named.root_path;
+  }
+
+  return getDefaultWorkspace()?.root_path;
+}
+
 export function resolveWorkspaceRoot(explicitRoot?: string): string {
   // 1. Explicit --root
   if (explicitRoot) return explicitRoot;
@@ -66,13 +81,19 @@ export function resolveWorkspaceRoot(explicitRoot?: string): string {
   const cwd = process.cwd();
   const nearest = findWorkspaceForCwd(cwd);
   if (nearest) return nearest.root_path;
-  // 3. Configured default workspace
+  // 3. Named workspace from `ix config set workspace <name>`
+  const cfg = loadConfig();
+  if (cfg.workspace) {
+    const named = loadWorkspaces().find(w => w.workspace_name === cfg.workspace);
+    if (named) return named.root_path;
+  }
+  // 4. Configured default workspace
   const defaultWs = getDefaultWorkspace();
   if (defaultWs) return defaultWs.root_path;
-  // 4. Git root
+  // 5. Git root
   try {
     return execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
   } catch {}
-  // 5. cwd fallback
+  // 6. cwd fallback
   return cwd;
 }

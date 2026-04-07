@@ -37,6 +37,8 @@ const SUPPORTED_EXTENSIONS = new Set([
   '.dockerfile',
   '.sql',
   '.json',
+  '.toml',
+  '.md', '.markdown',
 ]);
 
 export function isSupportedSourceFile(filePath: string): boolean {

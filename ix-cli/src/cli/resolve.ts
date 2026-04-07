@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import chalk from "chalk";
 import type { IxClient } from "../client/api.js";
+import { getActiveWorkspaceRoot } from "./config.js";
 import { stderr } from "./stderr.js";
 import { applyRoleFilter } from "./role-filter.js";
 
@@ -147,9 +148,10 @@ export async function resolveEntityFull(
   preferredKinds: string[],
   opts?: { kind?: string; path?: string; pick?: number; includeTests?: boolean; testsOnly?: boolean; searchLimit?: number }
 ): Promise<ResolveResult> {
+  const effectivePath = opts?.path ?? getActiveWorkspaceRoot();
   const kindFilter = opts?.kind;
   const nodes = await client.search(symbol, {
-    limit: opts?.searchLimit ?? (opts?.path ? 200 : looksTypeLikeSymbol(symbol) ? 50 : 20),
+    limit: opts?.searchLimit ?? (effectivePath ? 200 : looksTypeLikeSymbol(symbol) ? 50 : 20),
     kind: kindFilter,
     nameOnly: true,
   });
@@ -165,15 +167,15 @@ export async function resolveEntityFull(
   // Hard path filter: when --path is provided, exclude candidates whose sourceUri does not
   // contain the filter string. If no candidates survive, return "not found" rather than
   // falling back to cross-repo results.
-  const filteredNodes = opts?.path
+  const filteredNodes = effectivePath
     ? roleFiltered.filter((n: any) => {
         const uri = normalizeForPathMatch(n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "");
-        return uri.includes(normalizeForPathMatch(opts.path));
+        return uri.includes(normalizeForPathMatch(effectivePath));
       })
     : roleFiltered;
 
-  if (opts?.path && filteredNodes.length === 0) {
-    stderr(`No entity named "${symbol}" found in paths matching "${opts.path}".`);
+  if (effectivePath && filteredNodes.length === 0) {
+    stderr(`No entity named "${symbol}" found in paths matching "${effectivePath}".`);
     return { resolved: false, ambiguous: false, hiddenTestCount };
   }
 
@@ -195,7 +197,7 @@ export async function resolveEntityFull(
 
   // Score exact-name candidates
   if (exactName.length > 0) {
-    const winner = pickBest(exactName, symbol, preferredKinds, opts);
+    const winner = pickBest(exactName, symbol, preferredKinds, { ...opts, path: effectivePath });
     if (winner) {
       const picked = applyPick(winner, opts);
       if (picked) return { ...picked, hiddenTestCount } as ResolveResult;
@@ -204,7 +206,7 @@ export async function resolveEntityFull(
   }
 
   // ── Phase 2: Fall back to all candidates ────────────────────────────
-  const winner = pickBest(filteredNodes, symbol, preferredKinds, opts);
+  const winner = pickBest(filteredNodes, symbol, preferredKinds, { ...opts, path: effectivePath });
   if (winner) {
     const picked = applyPick(winner, opts);
     if (picked) return { ...picked, hiddenTestCount } as ResolveResult;
@@ -506,6 +508,23 @@ export async function resolveFileOrEntity(
     }
   }
 
+  // 1.5 Short ID prefix (8–31 hex chars, e.g. "aacc3359" from CLI output)
+  if (/^[0-9a-f]{8,31}$/i.test(target)) {
+    try {
+      const fullId = await client.resolvePrefix(target);
+      const details = await client.entity(fullId);
+      const n = details.node as any;
+      return {
+        id: fullId,
+        kind: n.kind || "unknown",
+        name: n.name || target,
+        resolutionMode: "exact",
+      };
+    } catch {
+      // Not a valid entity prefix — fall through to normal resolution
+    }
+  }
+
   // 2. File-like input → try graph file search
   if (looksFileLike(target)) {
     const fileEntity = await tryFileGraphMatch(client, target, opts);
@@ -577,10 +596,11 @@ async function tryFileGraphMatch(
 ): Promise<ResolvedEntity | null> {
   const basename = path.basename(target);
   const targetHasPath = target.includes("/") || target.includes("\\");
+  const effectivePath = opts?.path ?? getActiveWorkspaceRoot();
 
   // Search for file entities matching the basename
   const nodes = await client.search(basename, {
-    limit: opts?.path ? 200 : 20,
+    limit: effectivePath ? 200 : 20,
     kind: "file",
     nameOnly: true,
   });
@@ -589,15 +609,17 @@ async function tryFileGraphMatch(
   const targetLower = normalizeForPathMatch(target);
   const basenameLower = basename.toLowerCase();
   const basenameNoExt = basename.replace(/\.[^.]+$/, "").toLowerCase();
-  const normalizedPathHint = normalizeForPathMatch(opts?.path);
+  const normalizedPathHint = normalizeForPathMatch(effectivePath);
 
   const matches: Array<{ node: any; quality: number }> = [];
   for (const n of nodes as any[]) {
     const name = (n.name || "").toLowerCase();
     const uri = normalizeForPathMatch(n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "");
 
-    // Exact path match (best)
-    if (targetHasPath && (uri.endsWith(targetLower) || uri === targetLower)) {
+    // Exact path match (best): covers both absolute URIs matching absolute target,
+    // and relative URIs that are a suffix of an absolute target path.
+    if (targetHasPath && (uri.endsWith(targetLower) || uri === targetLower
+        || (uri.includes("/") && targetLower.endsWith(uri)))) {
       matches.push({ node: n, quality: 0 });
     }
     // Filename match in user-requested path
@@ -616,8 +638,13 @@ async function tryFileGraphMatch(
 
   if (matches.length === 0) return null;
 
-  // Sort by quality then pick best
-  matches.sort((a, b) => a.quality - b.quality);
+  // Sort by quality then by URI length ascending (shorter = closer to root = more prominent)
+  matches.sort((a, b) => {
+    if (a.quality !== b.quality) return a.quality - b.quality;
+    const uriA = normalizeForPathMatch(a.node.provenance?.sourceUri ?? a.node.provenance?.source_uri ?? "");
+    const uriB = normalizeForPathMatch(b.node.provenance?.sourceUri ?? b.node.provenance?.source_uri ?? "");
+    return uriA.length - uriB.length;
+  });
 
   // If multiple matches at same quality, prefer path-matching target
   const best = matches[0];
@@ -625,7 +652,9 @@ async function tryFileGraphMatch(
     // Disambiguate by path when user provided a path
     const pathMatch = matches.find(m => {
       const uri = normalizeForPathMatch(m.node.provenance?.sourceUri ?? m.node.provenance?.source_uri ?? "");
-      return uri.endsWith(targetLower) || (!!normalizedPathHint && uri.includes(normalizedPathHint));
+      return uri.endsWith(targetLower) || uri === targetLower
+        || (uri.includes("/") && targetLower.endsWith(uri))
+        || (!!normalizedPathHint && uri.includes(normalizedPathHint));
     });
     if (pathMatch) {
       return nodeToResolved(pathMatch.node, pathMatch.node.name, "exact");
